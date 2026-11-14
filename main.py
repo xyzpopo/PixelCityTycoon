@@ -71,7 +71,7 @@ C = {
     "white": (255, 255, 245),
 }
 
-TOOL_NAMES = ["이동", "제거", "도로", "집"]
+TOOL_NAMES = ["F1 이동", "F2 제거", "F3 도로", "F4 집"]
 TOOL_KEYS = ["move", "clear", "road", "house"]
 TOOL_HINTS = {
     "move": "이동 모드: 목적지를 클릭하면 캐릭터가 길을 따라 걸어갑니다.",
@@ -134,6 +134,8 @@ class CityGame:
         self.worker_path: List[Tuple[int, int]] = []
         self.worker_move_progress = 0.0
         self.worker_moved = False
+        self.worker_action = "idle"
+        self.worker_action_timer = 0.0
         self.dragging = False
         self.last_mouse = (0, 0)
         self.modal_seed = False
@@ -181,6 +183,27 @@ class CityGame:
         self.notice = message
         self.notice_until = time.time() + seconds
 
+    def select_tool(self, tool: str) -> None:
+        """Change the active interaction mode from mouse or function keys."""
+        if tool not in TOOL_KEYS:
+            return
+        changed = self.tool != tool
+        self.tool = tool
+        if changed:
+            mode_name = TOOL_NAMES[TOOL_KEYS.index(tool)].split(" ", 1)[1]
+            self.notify(f"{mode_name} 모드", 1.2)
+
+    def start_worker_action(self, action: str, target_x: int, target_y: int) -> None:
+        """Face the target and play a short work animation."""
+        wx, wy = self.worker_grid_position()
+        dx, dy = target_x - wx, target_y - wy
+        if abs(dx) >= abs(dy):
+            self.worker_facing = (1 if dx >= 0 else -1, 0)
+        else:
+            self.worker_facing = (0, 1 if dy >= 0 else -1)
+        self.worker_action = action
+        self.worker_action_timer = 0.58
+
     def button(self, rect: pygame.Rect, label: str, active: bool = False,
                small: bool = False) -> None:
         fill = C["gold"] if active else C["panel2"]
@@ -218,6 +241,8 @@ class CityGame:
         self.worker_path = []
         self.worker_move_progress = 0.0
         self.worker_moved = False
+        self.worker_action = "idle"
+        self.worker_action_timer = 0.0
         self.tutorial_step = 0
         self.tutorial_done = False
         self.tutorial_removed = 0
@@ -491,12 +516,14 @@ class CityGame:
         if self.tool == "clear":
             if (x, y) in self.trees:
                 self.trees.remove((x, y))
+                self.start_worker_action("chop", x, y)
                 self.wood += 2
                 self.tutorial_removed += 1
                 self.notify("나무를 제거했어요! 목재 +2")
                 self.check_tutorial()
             elif (x, y) in self.rocks:
                 self.rocks.remove((x, y))
+                self.start_worker_action("mine", x, y)
                 self.stone += 2
                 self.notify("바위를 제거했어요! 석재 +2")
             else:
@@ -510,6 +537,7 @@ class CityGame:
                 return
             self.money -= 100
             self.roads.add((x, y))
+            self.start_worker_action("build", x, y)
             if not self.tutorial_done:
                 self.tutorial_roads += 1
             self.notify("도로를 건설했어요. -₩100")
@@ -526,6 +554,7 @@ class CityGame:
                 return
             self.money -= 3000
             self.houses.add((x, y))
+            self.start_worker_action("build", x, y)
             self.population += 4
             self.tutorial_house_built = True
             self.notify("첫 주택 완공! 주민 4명이 입주했어요.", 3.5)
@@ -786,6 +815,26 @@ class CityGame:
                          (round(cx - 6*z - stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
         pygame.draw.rect(self.canvas, (213, 157, 111),
                          (round(cx + 3*z + stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
+        # The working arm swings forward while chopping, mining or building.
+        if self.worker_action_timer > 0:
+            progress = 1.0 - self.worker_action_timer / 0.58
+            swing = math.sin(progress * math.pi)
+            shoulder = (round(cx + 2*z), round(cy - 10*z + bob))
+            hand = (round(cx + (4 + swing * 5)*z), round(cy - (8 + swing * 5)*z + bob))
+            pygame.draw.line(self.canvas, (213, 157, 111), shoulder, hand, max(1, round(2*z)))
+            if self.worker_action in ("chop", "mine"):
+                handle_end = (hand[0] + round(3*z), hand[1] - round(5*z))
+                pygame.draw.line(self.canvas, (112, 73, 42), hand, handle_end, max(1, round(2*z)))
+                head_rect = pygame.Rect(handle_end[0] - round(2*z), handle_end[1] - round(2*z),
+                                        max(3, round(5*z)), max(2, round(3*z)))
+                pygame.draw.rect(self.canvas, (185, 190, 184), head_rect)
+            else:
+                hammer_end = (hand[0] + round(2*z), hand[1] - round(3*z))
+                pygame.draw.line(self.canvas, (112, 73, 42), hand, hammer_end, max(1, round(2*z)))
+                pygame.draw.rect(self.canvas, (185, 190, 184),
+                                 (hammer_end[0] - round(2*z), hammer_end[1] - round(1*z),
+                                  max(4, round(5*z)), max(2, round(2*z))))
+
         # Face and yellow safety helmet.
         pygame.draw.rect(self.canvas, (229, 185, 143),
                          (round(cx - 3*z), round(cy - 18*z + bob), max(4, round(6*z)), max(5, round(6*z))))
@@ -1007,7 +1056,7 @@ class CityGame:
                 tool_xs = [8, 94, 180, 266]
                 for i, tx in enumerate(tool_xs):
                     if tx <= x <= tx + 80:
-                        self.tool = TOOL_KEYS[i]
+                        self.select_tool(TOOL_KEYS[i])
                         return
             if 408 <= x <= 494 and 294 <= y <= 317:
                 self.expand_land()
@@ -1065,14 +1114,22 @@ class CityGame:
                 else:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
+                    elif event.key == pygame.K_F1:
+                        self.select_tool("move")
+                    elif event.key == pygame.K_F2:
+                        self.select_tool("clear")
+                    elif event.key == pygame.K_F3:
+                        self.select_tool("road")
+                    elif event.key == pygame.K_F4:
+                        self.select_tool("house")
                     elif event.key == pygame.K_1:
-                        self.tool = "move"
+                        self.select_tool("move")
                     elif event.key == pygame.K_2:
-                        self.tool = "clear"
+                        self.select_tool("clear")
                     elif event.key == pygame.K_3:
-                        self.tool = "road"
+                        self.select_tool("road")
                     elif event.key == pygame.K_4:
-                        self.tool = "house"
+                        self.select_tool("house")
                     elif event.key == pygame.K_F5:
                         self.save_game()
                     elif event.key == pygame.K_F9:
@@ -1109,6 +1166,10 @@ class CityGame:
 
     def update(self, dt: float) -> None:
         self.update_worker(dt)
+        if self.worker_action_timer > 0:
+            self.worker_action_timer = max(0.0, self.worker_action_timer - dt)
+            if self.worker_action_timer == 0.0:
+                self.worker_action = "idle"
         # Accelerated clock: six in-game minutes pass per real second.
         now = time.time()
         elapsed = now - self.last_clock_tick
