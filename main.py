@@ -214,6 +214,7 @@ class CityGame:
         self.worker_x = MAP_W // 2
         self.worker_y = MAP_H // 2
         self.worker_facing = (1, 0)
+        self.worker_control = False
         self.worker_anim = 0.0
         self.tutorial_step = 0
         self.tutorial_done = False
