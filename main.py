@@ -981,7 +981,7 @@ class CityGame:
 
     def act_on_tile(self, x: int, y: int) -> None:
         """Compatibility entry point: work modes now queue actions instead of executing instantly."""
-        if self.tool in ("clear", "road", "house"):
+        if self.tool in ("clear", "road", "house", "dig"):
             self.toggle_work_order(self.tool, x, y)
 
     def check_tutorial(self) -> None:
@@ -990,11 +990,11 @@ class CityGame:
         if self.tutorial_step == 1 and self.tutorial_removed >= 2:
             self.tutorial_step = 2
             self.tool = "road"
-            self.notify("도로 3칸을 배치하세요. 도로는 목재 1개가 필요하고, 바위를 제거하면 석재를 얻어요.", 4)
+            self.notify("도로 3칸을 배치하세요. 도로는 목재 1개, 집은 목재와 석재가 필요해요.", 4)
         elif self.tutorial_step == 2 and self.tutorial_roads >= 3:
             self.tutorial_step = 3
             self.tool = "house"
-            self.notify("도로가 준비됐어요. 도로 옆에 집을 지어보세요.", 4)
+            self.notify("도로가 준비됐어요. 집에는 목재 1개와 석재 1개가 필요해요.", 4)
         elif self.tutorial_step == 3 and self.tutorial_house_built:
             self.tutorial_step = 4
             self.tutorial_done = True
@@ -1683,6 +1683,21 @@ class CityGame:
                 else:
                     color = C["green"] if allowed else C["red"]
                 pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
+                if self.tool == "road" and allowed:
+                    if self.road_direction == "x":
+                        start = (round(cx - TILE_W * self.zoom * 0.18),
+                                 round(cy - TILE_H * self.zoom * 0.18))
+                        end = (round(cx + TILE_W * self.zoom * 0.18),
+                               round(cy + TILE_H * self.zoom * 0.18))
+                    else:
+                        start = (round(cx - TILE_W * self.zoom * 0.18),
+                                 round(cy + TILE_H * self.zoom * 0.18))
+                        end = (round(cx + TILE_W * self.zoom * 0.18),
+                               round(cy - TILE_H * self.zoom * 0.18))
+                    pygame.draw.line(
+                        self.canvas, C["road_center"], start, end,
+                        max(1, round(2 * self.zoom))
+                    )
 
         # Tutorial card.
         self.draw_tutorial_card()
@@ -1773,8 +1788,8 @@ class CityGame:
         tasks = [
             ("1. 캐릭터 이동하기", "[이동] 모드에서 빈 땅을 클릭해 보세요."),
             (f"2. 나무 제거하기 ({min(self.tutorial_removed,2)}/2)", "[제거] 도구로 나무 2개를 치우세요."),
-            (f"3. 도로 배치하기 ({min(self.tutorial_roads,3)}/3)", "도로는 목재 1개가 필요해요. 바위는 [제거]로 석재를 얻어요."),
-            ("4. 첫 번째 집 건설하기", "도로 옆에 [집]을 지으세요."),
+            (f"3. 도로 배치하기 ({min(self.tutorial_roads,3)}/3)", "도로는 목재 1개, 집은 목재·석재가 필요해요."),
+            ("4. 첫 번째 집 건설하기", "도로 옆에 집을 지으세요. 바위는 [제거]로!"),
         ]
         title, hint = tasks[min(self.tutorial_step, 3)]
         self.text(self.canvas, title, 15, 62, 10, C["white"])
