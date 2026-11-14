@@ -1005,6 +1005,8 @@ class CityGame:
                 if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
                     self.draw_road(x, y)
 
+        self.draw_worker_path_preview()
+
         depth_items: List[Tuple[float, float, int, int, int, str]] = []
         for x in range(MAP_W):
             for y in range(MAP_H):
@@ -1056,6 +1058,54 @@ class CityGame:
         # Tutorial card.
         self.draw_tutorial_card()
         self.canvas.set_clip(None)
+
+    def draw_worker_path_preview(self) -> None:
+        """Show the walkable route to the tile currently under the mouse."""
+        if self.tool != "move" or self.dragging or self.modal_seed:
+            return
+
+        mouse = pygame.mouse.get_pos()
+        mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+        if not VIEW_RECT.collidepoint(mx, my):
+            return
+
+        goal = self.screen_to_tile(mx, my)
+        if goal is None:
+            return
+
+        path = self.find_worker_path(goal)
+        if path is None or not path:
+            return
+
+        # Draw the route on the ground, before trees, rocks, houses and the
+        # worker are rendered, so foreground objects naturally cover the path.
+        previous = self.worker_screen_position()
+        line_width = max(1, round(2 * self.zoom))
+        dot_radius = max(2, round(2.2 * self.zoom))
+        for tile in path:
+            point = self.tile_to_screen(*tile)
+            end = (round(point[0]), round(point[1]))
+            pygame.draw.line(
+                self.canvas, (34, 83, 55),
+                (round(previous[0]), round(previous[1])), end,
+                line_width + 2
+            )
+            pygame.draw.line(
+                self.canvas, C["green"],
+                (round(previous[0]), round(previous[1])), end,
+                line_width
+            )
+            pygame.draw.circle(self.canvas, (34, 83, 55), end, dot_radius + 1)
+            pygame.draw.circle(self.canvas, C["green"], end, dot_radius)
+            previous = point
+
+        # A brighter outline identifies the selected destination.
+        gx, gy = self.tile_to_screen(*goal)
+        destination = self.diamond(gx, gy, TILE_W * self.zoom, TILE_H * self.zoom)
+        pygame.draw.polygon(
+            self.canvas, C["white"], destination,
+            max(1, round(1.5 * self.zoom))
+        )
 
     def draw_tutorial_card(self) -> None:
         if self.tutorial_done:
