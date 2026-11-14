@@ -145,6 +145,7 @@ class CityGame:
         self.worker_action_timer = 0.0
         self.worker_action_elapsed = 0.0
         self.worker_action_hit_played = False
+        self.worker_pending_action: Optional[Tuple[str, int, int]] = None
         self.work_queue: List[Tuple[str, int, int]] = []
         self.work_path_active = False
         self.dragging = False
@@ -319,6 +320,7 @@ class CityGame:
         self.worker_action_timer = 0.0
         self.worker_action_elapsed = 0.0
         self.worker_action_hit_played = False
+        self.worker_pending_action = None
         self.work_queue = []
         self.work_path_active = False
         self.tutorial_step = 0
@@ -511,6 +513,9 @@ class CityGame:
 
     def set_worker_destination(self, x: int, y: int) -> None:
         """Set a click-to-move destination. This is only called in move mode."""
+        if self.worker_pending_action is not None:
+            self.notify("작업 타격이 끝난 뒤 이동할 수 있어요.", 2)
+            return
         goal = (x, y)
         if goal == (self.worker_x, self.worker_y) and not self.worker_path:
             return
@@ -636,7 +641,14 @@ class CityGame:
                 self.notify("이 타일에는 이미 다른 작업이 예약되어 있어요.", 2.2)
                 return
             self.work_queue.pop(existing_index)
-            if existing_index == 0 and self.work_path_active:
+            if existing_index == 0 and self.worker_pending_action == existing:
+                self.worker_pending_action = None
+                self.worker_action = "idle"
+                self.worker_action_timer = 0.0
+                self.worker_action_elapsed = 0.0
+                self.worker_action_hit_played = False
+                self.work_path_active = False
+            elif existing_index == 0 and self.work_path_active:
                 if self.worker_path and self.worker_move_progress >= 0.5:
                     self.worker_x, self.worker_y = self.worker_path[0]
                 self.worker_path.clear()
@@ -740,12 +752,13 @@ class CityGame:
         path.reverse()
         return path
 
-    def remove_resource_at(self, x: int, y: int) -> bool:
+    def remove_resource_at(self, x: int, y: int, start_animation: bool = True) -> bool:
         """Remove a tree or rock and apply the usual rewards/tutorial progress."""
         target = (x, y)
         if target in self.trees:
             self.trees.remove(target)
-            self.start_worker_action("chop", x, y)
+            if start_animation:
+                self.start_worker_action("chop", x, y)
             self.wood += 2
             self.tutorial_removed += 1
             self.notify("나무를 제거했어요! 목재 +2")
@@ -753,13 +766,14 @@ class CityGame:
             return True
         if target in self.rocks:
             self.rocks.remove(target)
-            self.start_worker_action("mine", x, y)
+            if start_animation:
+                self.start_worker_action("mine", x, y)
             self.stone += 2
             self.notify("바위를 제거했어요! 석재 +2")
             return True
         return False
 
-    def perform_build_order(self, tool: str, x: int, y: int) -> bool:
+    def perform_build_order(self, tool: str, x: int, y: int, start_animation: bool = True) -> bool:
         """Apply a queued road or house construction after the worker arrives."""
         if not self.can_build_on(x, y):
             self.notify("예약한 건설 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
@@ -770,7 +784,8 @@ class CityGame:
                 return False
             self.money -= 100
             self.roads.add((x, y))
-            self.start_worker_action("build", x, y)
+            if start_animation:
+                self.start_worker_action("build", x, y)
             if not self.tutorial_done:
                 self.tutorial_roads += 1
             self.notify("예약한 도로를 건설했어요. -₩100")
@@ -785,7 +800,8 @@ class CityGame:
                 return False
             self.money -= 3000
             self.houses.add((x, y))
-            self.start_worker_action("build", x, y)
+            if start_animation:
+                self.start_worker_action("build", x, y)
             self.population += 4
             self.tutorial_house_built = True
             self.notify("예약한 주택을 완공했어요! 주민 4명이 입주했어요.", 3.5)
@@ -802,7 +818,7 @@ class CityGame:
             elif tool == "road":
                 valid = self.can_build_on(x, y)
             elif tool == "house":
-                valid = self.can_build_on(x, y) and self.has_adjacent_road(x, y)
+                valid = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
             else:
                 valid = False
             if valid:
@@ -811,7 +827,9 @@ class CityGame:
             self.work_path_active = False
             self.notify("사용할 수 없게 된 작업 예약을 건너뛰었어요.", 2.2)
 
-        if not self.work_queue or self.worker_path or self.worker_action_timer > 0:
+        if (not self.work_queue or self.worker_path
+                or self.worker_action_timer > 0
+                or self.worker_pending_action is not None):
             return
 
         tool, x, y = self.work_queue[0]
@@ -835,12 +853,31 @@ class CityGame:
             self.worker_facing = (nx - self.worker_x, ny - self.worker_y)
             return
 
+        self.work_path_active = False
+        if tool == "clear":
+            action = "chop" if (x, y) in self.trees else "mine"
+        else:
+            action = "build"
+        self.worker_pending_action = (tool, x, y)
+        self.start_worker_action(action, x, y)
+
+    def complete_pending_work_action(self) -> None:
+        """Apply the queued result exactly at the animation's impact frame."""
+        pending = self.worker_pending_action
+        if pending is None:
+            return
+        if not self.work_queue or self.work_queue[0] != pending:
+            self.worker_pending_action = None
+            return
+
+        tool, x, y = pending
+        self.worker_pending_action = None
         self.work_queue.pop(0)
         self.work_path_active = False
         if tool == "clear":
-            self.remove_resource_at(x, y)
+            self.remove_resource_at(x, y, start_animation=False)
         else:
-            self.perform_build_order(tool, x, y)
+            self.perform_build_order(tool, x, y, start_animation=False)
 
     def has_adjacent_road(self, x: int, y: int) -> bool:
         return any((x + dx, y + dy) in self.roads
@@ -1826,6 +1863,7 @@ class CityGame:
                     and self.worker_action_elapsed >= hit_time):
                 self.worker_action_hit_played = True
                 self.play_worker_action_sound(self.worker_action)
+                self.complete_pending_work_action()
             if self.worker_action_timer == 0.0:
                 self.worker_action = "idle"
                 self.worker_action_elapsed = 0.0
