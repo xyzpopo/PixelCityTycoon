@@ -221,7 +221,6 @@ class CityGame:
         self.tutorial_removed = 0
         self.tutorial_roads = 0
         self.tutorial_house_built = False
-        self.camera_used = False
 
         # A gently winding river runs along one side of the map.
         river_x = MAP_W - 9
@@ -410,6 +409,9 @@ class CityGame:
         goal = (x, y)
         if goal == (self.worker_x, self.worker_y) and not self.worker_path:
             return
+        if not self.worker_can_stand(x, y):
+            self.notify("그곳에는 이동할 수 없어요. 다른 빈 타일을 선택해 주세요.", 2)
+            return
 
         # When a new destination is chosen mid-step, settle at the nearer tile
         # before calculating the new route so the character never teleports.
@@ -508,18 +510,6 @@ class CityGame:
             self.tutorial_house_built = True
             self.notify("첫 주택 완공! 주민 4명이 입주했어요.", 3.5)
             self.check_tutorial()
-        elif self.tool == "inspect":
-            terrain = self.terrain[x][y].terrain
-            label = {"grass": "잔디", "water": "강", "mountain": "산"}.get(terrain, terrain)
-            if (x, y) in self.trees:
-                label = "나무가 있는 " + label
-            elif (x, y) in self.rocks:
-                label = "바위가 있는 " + label
-            elif (x, y) in self.roads:
-                label = "도로"
-            elif (x, y) in self.houses:
-                label = "주택 · 주민 4명"
-            self.notify(f"타일 ({x}, {y}) · {label}", 2)
 
     def check_tutorial(self) -> None:
         if self.tutorial_done:
@@ -875,7 +865,7 @@ class CityGame:
                 elif self.tool == "clear":
                     allowed = (x, y) in self.trees or (x, y) in self.rocks
                 else:
-                    allowed = self.is_unlocked(x, y)
+                    allowed = self.worker_can_stand(x, y)
                 color = C["green"] if allowed else C["red"]
                 pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
 
@@ -1088,7 +1078,7 @@ class CityGame:
             self.game_minutes -= 24 * 60
             self.day += 1
         # The first tutorial task is completed by giving the character a destination.
-        if not self.tutorial_done and self.tutorial_step == 0 and self.worker_moved:
+        if not self.tutorial_done and self.tutorial_step == 0 and self.worker_moved and not self.worker_path:
             self.tutorial_step = 1
             self.tool = "clear"
             self.notify("좋아요! 이제 나무 2개를 제거해 건설 공간을 만드세요.", 4)
