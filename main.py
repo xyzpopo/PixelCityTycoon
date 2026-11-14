@@ -59,6 +59,7 @@ C = {
     "rock": (121, 126, 119),
     "road": (111, 111, 111),
     "road_light": (147, 145, 131),
+    "road_center": (232, 197, 78),
     "road_edge": (75, 77, 72),
     "panel": (35, 43, 49),
     "panel2": (48, 59, 65),
@@ -742,44 +743,107 @@ class CityGame:
         pygame.draw.line(self.canvas, (177, 181, 167), pts[1], pts[2], max(1, round(z)))
 
     def draw_road(self, x: int, y: int) -> None:
-        """Draw a road tile whose arms connect automatically to adjacent roads."""
+        """Draw an inset road surface that expands to meet neighboring road tiles."""
         cx, cy = self.tile_to_screen(x, y)
         z = self.zoom
         tw, th = TILE_W * z, TILE_H * z
 
-        # The four neighboring isometric tiles meet at these edge midpoints.
-        # Drawing matching arms to each midpoint makes adjoining roads join
-        # seamlessly without storing any extra connection data in the save.
-        neighbors = (
-            (x + 1, y, tw * 0.25, th * 0.25),
-            (x - 1, y, -tw * 0.25, -th * 0.25),
-            (x, y + 1, -tw * 0.25, th * 0.25),
-            (x, y - 1, tw * 0.25, -th * 0.25),
+        # A road tile is an inset diamond on the grass. When another road is
+        # present across one side, that side's inset is removed so both tiles
+        # meet exactly at their shared edge.
+        side_specs = (
+            ("east", (x + 1, y), 1.0, 1.0, tw * 0.25, th * 0.25),
+            ("west", (x - 1, y), -1.0, -1.0, -tw * 0.25, -th * 0.25),
+            ("south", (x, y + 1), -1.0, 1.0, -tw * 0.25, th * 0.25),
+            ("north", (x, y - 1), 1.0, -1.0, tw * 0.25, -th * 0.25),
         )
-        edge_width = max(4, round(10 * z))
-        road_width = max(2, round(7 * z))
+        connected = {
+            name: (neighbor in self.roads and self.is_unlocked(*neighbor))
+            for name, neighbor, _a, _b, _dx, _dy in side_specs
+        }
+
+        def road_polygon(limits: Dict[str, float]) -> List[Tuple[int, int]]:
+            # Clip the tile diamond in normalized isometric coordinates.
+            # Each side is described by A*u + B*v <= limit.
+            polygon: List[Tuple[float, float]] = [
+                (0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)
+            ]
+            planes = (
+                ("east", 1.0, 1.0),
+                ("west", -1.0, -1.0),
+                ("south", -1.0, 1.0),
+                ("north", 1.0, -1.0),
+            )
+            for side, a_coeff, b_coeff in planes:
+                limit = limits[side]
+                if not polygon:
+                    break
+                clipped: List[Tuple[float, float]] = []
+                previous = polygon[-1]
+                previous_value = a_coeff * previous[0] + b_coeff * previous[1] - limit
+                previous_inside = previous_value <= 1e-9
+
+                for current in polygon:
+                    current_value = a_coeff * current[0] + b_coeff * current[1] - limit
+                    current_inside = current_value <= 1e-9
+                    if previous_inside != current_inside:
+                        denominator = previous_value - current_value
+                        t = previous_value / denominator if abs(denominator) > 1e-12 else 0.0
+                        clipped.append((
+                            previous[0] + (current[0] - previous[0]) * t,
+                            previous[1] + (current[1] - previous[1]) * t,
+                        ))
+                    if current_inside:
+                        clipped.append(current)
+                    previous = current
+                    previous_value = current_value
+                    previous_inside = current_inside
+                polygon = clipped
+
+            return [
+                (round(cx + u * tw * 0.5), round(cy + v * th * 0.5))
+                for u, v in polygon
+            ]
+
+        # Unconnected sides retain a narrow strip of grass. Connected sides
+        # reach the tile edge; the inner fill uses the same edge to avoid seams.
+        outer_limits = {
+            side: (1.0 if connected[side] else 0.80)
+            for side in connected
+        }
+        inner_limits = {
+            side: (outer_limits[side] if connected[side] else outer_limits[side] - 0.035)
+            for side in connected
+        }
+
+        outer = road_polygon(outer_limits)
+        inner = road_polygon(inner_limits)
+        if len(outer) >= 3:
+            pygame.draw.polygon(self.canvas, C["road_edge"], outer)
+        if len(inner) >= 3:
+            pygame.draw.polygon(self.canvas, C["road"], inner)
+
+        # Dashed yellow center markings follow only actual road connections.
+        # A corner, T-junction, or crossroads is formed automatically by the
+        # connected half-lines meeting at the center of this tile.
         center = (round(cx), round(cy))
-
-        for nx, ny, dx, dy in neighbors:
-            if (nx, ny) not in self.roads or not self.is_unlocked(nx, ny):
+        dash_length = max(2.0, 4.0 * z)
+        dash_gap = max(1.5, 2.8 * z)
+        line_width = max(1, round(1.4 * z))
+        for name, _neighbor, _a, _b, dx, dy in side_specs:
+            if not connected[name]:
                 continue
-            endpoint = (round(cx + dx), round(cy + dy))
-            pygame.draw.line(self.canvas, C["road_edge"], center, endpoint, edge_width)
-            pygame.draw.line(self.canvas, C["road"], center, endpoint, road_width)
-
-        # A small diamond hub keeps junctions continuous and gives isolated
-        # road tiles a visible paved center.
-        hub = self.diamond(cx, cy, max(7, tw * 0.34), max(5, th * 0.62))
-        pygame.draw.polygon(self.canvas, C["road_edge"], hub)
-        inner_hub = self.diamond(cx, cy - 0.4 * z,
-                                 max(5, tw * 0.25), max(4, th * 0.43))
-        pygame.draw.polygon(self.canvas, C["road"], inner_hub)
-
-        # Subtle paving fleck, fixed to the tile so it does not flicker.
-        if (x * 3 + y * 5) % 4 == 0:
-            pygame.draw.rect(self.canvas, C["road_light"],
-                             (round(cx - z), round(cy - 0.5 * z),
-                              max(1, round(2 * z)), max(1, round(z))))
+            length = math.hypot(dx, dy)
+            if length <= 0:
+                continue
+            ux, uy = dx / length, dy / length
+            offset = 0.0
+            while offset < length:
+                end_offset = min(length, offset + dash_length)
+                start_point = (round(cx + ux * offset), round(cy + uy * offset))
+                end_point = (round(cx + ux * end_offset), round(cy + uy * end_offset))
+                pygame.draw.line(self.canvas, C["road_center"], start_point, end_point, line_width)
+                offset += dash_length + dash_gap
 
     def draw_house(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
