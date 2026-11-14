@@ -41,6 +41,12 @@ ACTION_RANGE = 3
 MAX_WORK_QUEUE = 50
 WORK_ACTION_DURATION = 0.86
 WORK_ACTION_HIT_TIMES = {"chop": 0.47, "mine": 0.44, "build": 0.52}
+ROAD_MONEY_COST = 100
+ROAD_WOOD_COST = 1
+HOUSE_MONEY_COST = 3000
+HOUSE_WOOD_COST = 1
+HOUSE_STONE_COST = 1
+DIG_STONE_REWARD = 3
 
 # Palette: restrained 16-bit-inspired colors.
 C = {
@@ -76,13 +82,14 @@ C = {
     "white": (255, 255, 245),
 }
 
-TOOL_NAMES = ["F1 이동", "F2 제거", "F3 도로", "F4 집"]
-TOOL_KEYS = ["move", "clear", "road", "house"]
+TOOL_NAMES = ["F1 이동", "F2 제거", "F3 도로", "F4 집", "F6 굴착"]
+TOOL_KEYS = ["move", "clear", "road", "house", "dig"]
 TOOL_HINTS = {
-    "move": "이동 모드: 목적지를 클릭하면 캐릭터가 길을 따라 걸어갑니다.",
-    "clear": "제거 모드: 나무·바위를 클릭해 예약하세요. 다시 클릭하면 취소됩니다.",
-    "road": "도로 모드: 빈 잔디를 클릭해 도로 건설을 예약하세요.",
-    "house": "집 모드: 도로 옆 빈 잔디를 클릭해 집 건설을 예약하세요.",
+    "move": "이동: 빈 타일을 클릭해 작업자를 이동합니다.",
+    "clear": "제거: 나무 +목재 2 · 바위 +석재 2",
+    "road": "도로: ₩100 + 목재 1 · R/방향 버튼으로 축 전환",
+    "house": "집: 도로 옆에 건설 · ₩3,000 + 목재 1 + 석재 1",
+    "dig": "굴착: 산 타일을 평탄화하고 석재 3 획득",
 }
 
 
@@ -120,6 +127,8 @@ class CityGame:
         self.trees: Set[Tuple[int, int]] = set()
         self.rocks: Set[Tuple[int, int]] = set()
         self.roads: Set[Tuple[int, int]] = set()
+        self.road_directions: Dict[Tuple[int, int], str] = {}
+        self.road_direction = "x"
         self.houses: Set[Tuple[int, int]] = set()
         self.expand_level = 0
         self.money = 100000
@@ -301,6 +310,8 @@ class CityGame:
         self.trees.clear()
         self.rocks.clear()
         self.roads.clear()
+        self.road_directions.clear()
+        self.road_direction = "x"
         self.houses.clear()
         self.expand_level = 0
         self.money = 100000
@@ -403,6 +414,18 @@ class CityGame:
                 forced_trees += 1
                 if forced_trees >= 2:
                     break
+
+        # Keep one stone source reachable in every new starter settlement.
+        # A short clear strip ensures at least one adjacent work position is open.
+        starter_rock = (sx, sy + 5)
+        for path_y in range(sy + 1, sy + 5):
+            path_tile = (sx, path_y)
+            self.terrain[path_tile[0]][path_tile[1]].terrain = "grass"
+            self.trees.discard(path_tile)
+            self.rocks.discard(path_tile)
+        self.terrain[starter_rock[0]][starter_rock[1]].terrain = "grass"
+        self.trees.discard(starter_rock)
+        self.rocks.add(starter_rock)
 
         self.notify(f"새 지형 생성 완료 · 시드 {self.seed}", 3.5)
 
@@ -572,6 +595,16 @@ class CityGame:
             return False
         return True
 
+    def can_dig_terrain(self, x: int, y: int) -> bool:
+        """Only exposed, unlocked mountain tiles can be excavated."""
+        if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
+            return False
+        if self.terrain[x][y].terrain != "mountain":
+            return False
+        if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.roads or (x, y) in self.houses:
+            return False
+        return True
+
     def worker_grid_position(self) -> Tuple[float, float]:
         """Current continuous grid coordinates, including an in-progress step."""
         wx, wy = float(self.worker_x), float(self.worker_y)
@@ -589,8 +622,20 @@ class CityGame:
 
     def reserved_build_cost(self) -> int:
         """Money already committed to queued road and house orders."""
-        return sum(100 if tool == "road" else 3000 if tool == "house" else 0
+        return sum(ROAD_MONEY_COST if tool == "road" else HOUSE_MONEY_COST if tool == "house" else 0
                    for tool, _x, _y in self.work_queue)
+
+    def reserved_material_costs(self) -> Tuple[int, int]:
+        """Wood and stone already committed to queued construction orders."""
+        reserved_wood = sum(
+            ROAD_WOOD_COST if tool == "road" else HOUSE_WOOD_COST if tool == "house" else 0
+            for tool, _x, _y in self.work_queue
+        )
+        reserved_stone = sum(
+            HOUSE_STONE_COST if tool == "house" else 0
+            for tool, _x, _y in self.work_queue
+        )
+        return reserved_wood, reserved_stone
 
     def has_planned_adjacent_road(self, x: int, y: int) -> bool:
         """Check built roads and road orders placed earlier in the queue."""
@@ -608,26 +653,39 @@ class CityGame:
             if (x, y) not in self.trees and (x, y) not in self.rocks:
                 return False, "제거 예약은 나무나 바위에만 할 수 있어요."
             return True, ""
+        if tool == "dig":
+            if not self.can_dig_terrain(x, y):
+                return False, "굴착은 개척 구역 안의 산 타일에만 예약할 수 있어요."
+            return True, ""
         if tool not in ("road", "house"):
             return False, "예약할 수 없는 작업 종류예요."
         if not self.can_build_on(x, y):
             return False, "건설 예약은 비어 있는 잔디 타일에만 할 수 있어요."
 
         available_money = self.money - self.reserved_build_cost()
+        reserved_wood, reserved_stone = self.reserved_material_costs()
+        available_wood = self.wood - reserved_wood
+        available_stone = self.stone - reserved_stone
         if tool == "road":
-            if available_money < 100:
-                return False, "예약할 도로 건설 비용이 부족해요."
+            if available_money < ROAD_MONEY_COST:
+                return False, f"도로 건설 자금이 부족해요. 필요 자금: ₩{ROAD_MONEY_COST:,}"
+            if available_wood < ROAD_WOOD_COST:
+                return False, f"도로 건설에 목재 {ROAD_WOOD_COST}개가 필요해요."
             return True, ""
 
         if not self.has_planned_adjacent_road(x, y):
             return False, "집은 이미 있는 도로나 먼저 예약한 도로 옆에만 예약할 수 있어요."
-        if available_money < 3000:
-            return False, "예약할 주택 건설 비용이 부족해요."
+        if available_money < HOUSE_MONEY_COST:
+            return False, f"주택 건설 자금이 부족해요. 필요 자금: ₩{HOUSE_MONEY_COST:,}"
+        if available_wood < HOUSE_WOOD_COST or available_stone < HOUSE_STONE_COST:
+            return False, (
+                f"주택에는 목재 {HOUSE_WOOD_COST}개와 석재 {HOUSE_STONE_COST}개가 필요해요."
+            )
         return True, ""
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
-        """Queue or cancel a clear, road, or house action at any unlocked distance."""
-        if tool not in ("clear", "road", "house"):
+        """Queue or cancel a clear, road, house, or terrain-dig action."""
+        if tool not in ("clear", "road", "house", "dig"):
             return
 
         existing_index = next(
@@ -641,6 +699,8 @@ class CityGame:
                 self.notify("이 타일에는 이미 다른 작업이 예약되어 있어요.", 2.2)
                 return
             self.work_queue.pop(existing_index)
+            if tool == "road" and (x, y) not in self.roads:
+                self.road_directions.pop((x, y), None)
             if existing_index == 0 and self.worker_pending_action == existing:
                 self.worker_pending_action = None
                 self.worker_action = "idle"
@@ -666,7 +726,12 @@ class CityGame:
             return
 
         self.work_queue.append((tool, x, y))
-        labels = {"clear": "제거", "road": "도로 건설", "house": "주택 건설"}
+        if tool == "road":
+            self.road_directions[(x, y)] = self.road_direction
+        labels = {
+            "clear": "제거", "road": "도로 건설",
+            "house": "주택 건설", "dig": "지형 굴착"
+        }
         self.notify(
             f"{labels[tool]} 예약 {len(self.work_queue)}개 · 클릭한 순서대로 작업합니다.",
             2.5
@@ -675,7 +740,7 @@ class CityGame:
     def find_worker_path_to_work_target(
         self, target: Tuple[int, int]
     ) -> Optional[List[Tuple[int, int]]]:
-        """Find a path beside a tree/rock, with a short-range fallback."""
+        """Find a path beside a resource or dig site, with a short-range fallback."""
         tx, ty = target
         start = (self.worker_x, self.worker_y)
         adjacent_positions = {
@@ -773,38 +838,57 @@ class CityGame:
             return True
         return False
 
+    def dig_terrain_at(self, x: int, y: int) -> bool:
+        """Flatten one mountain tile and award stone at the mining impact frame."""
+        if not self.can_dig_terrain(x, y):
+            self.notify("굴착할 수 없는 지형이에요.", 2)
+            return False
+        self.terrain[x][y].terrain = "grass"
+        self.terrain[x][y].variation = self.rng.randrange(3)
+        self.stone += DIG_STONE_REWARD
+        self.notify(f"산 타일을 굴착했어요! 석재 +{DIG_STONE_REWARD}")
+        return True
+
     def perform_build_order(self, tool: str, x: int, y: int, start_animation: bool = True) -> bool:
         """Apply a queued road or house construction after the worker arrives."""
         if not self.can_build_on(x, y):
             self.notify("예약한 건설 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
             return False
         if tool == "road":
-            if self.money < 100:
-                self.notify("도로 건설 자금이 부족해 예약을 건너뛰었어요.", 2.8)
+            if self.money < ROAD_MONEY_COST or self.wood < ROAD_WOOD_COST:
+                self.notify("도로 건설에 필요한 자금 또는 목재가 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
-            self.money -= 100
+            self.money -= ROAD_MONEY_COST
+            self.wood -= ROAD_WOOD_COST
             self.roads.add((x, y))
+            self.road_directions.setdefault((x, y), self.road_direction)
             if start_animation:
                 self.start_worker_action("build", x, y)
             if not self.tutorial_done:
                 self.tutorial_roads += 1
-            self.notify("예약한 도로를 건설했어요. -₩100")
+            self.notify(f"도로를 건설했어요. -₩{ROAD_MONEY_COST:,} · 목재 -{ROAD_WOOD_COST}")
             self.check_tutorial()
             return True
         if tool == "house":
             if not self.has_adjacent_road(x, y):
                 self.notify("예약한 집 옆에 도로가 없어 건설을 건너뛰었어요.", 2.8)
                 return False
-            if self.money < 3000:
-                self.notify("주택 건설 자금이 부족해 예약을 건너뛰었어요.", 2.8)
+            if (self.money < HOUSE_MONEY_COST or self.wood < HOUSE_WOOD_COST
+                    or self.stone < HOUSE_STONE_COST):
+                self.notify("주택 건설에 필요한 자금 또는 자원이 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
-            self.money -= 3000
+            self.money -= HOUSE_MONEY_COST
+            self.wood -= HOUSE_WOOD_COST
+            self.stone -= HOUSE_STONE_COST
             self.houses.add((x, y))
             if start_animation:
                 self.start_worker_action("build", x, y)
             self.population += 4
             self.tutorial_house_built = True
-            self.notify("예약한 주택을 완공했어요! 주민 4명이 입주했어요.", 3.5)
+            self.notify(
+                f"주택 완공! 주민 4명 입주 · -₩{HOUSE_MONEY_COST:,} · "
+                f"목재 -{HOUSE_WOOD_COST} · 석재 -{HOUSE_STONE_COST}", 3.5
+            )
             self.check_tutorial()
             return True
         return False
@@ -819,11 +903,15 @@ class CityGame:
                 valid = self.can_build_on(x, y)
             elif tool == "house":
                 valid = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
+            elif tool == "dig":
+                valid = self.can_dig_terrain(x, y)
             else:
                 valid = False
             if valid:
                 break
             self.work_queue.pop(0)
+            if tool == "road" and (x, y) not in self.roads:
+                self.road_directions.pop((x, y), None)
             self.work_path_active = False
             self.notify("사용할 수 없게 된 작업 예약을 건너뛰었어요.", 2.2)
 
@@ -834,13 +922,15 @@ class CityGame:
 
         tool, x, y = self.work_queue[0]
         target = (x, y)
-        if tool == "clear":
+        if tool in ("clear", "dig"):
             path = self.find_worker_path_to_work_target(target)
         else:
             path = self.find_worker_path_to_action_target(target)
 
         if path is None:
             self.work_queue.pop(0)
+            if tool == "road" and (x, y) not in self.roads:
+                self.road_directions.pop((x, y), None)
             self.work_path_active = False
             self.notify("작업 위치까지 이동할 수 없어 예약을 건너뛰었어요.", 2.8)
             return
@@ -856,6 +946,8 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             action = "chop" if (x, y) in self.trees else "mine"
+        elif tool == "dig":
+            action = "mine"
         else:
             action = "build"
         self.worker_pending_action = (tool, x, y)
@@ -876,8 +968,12 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             self.remove_resource_at(x, y, start_animation=False)
+        elif tool == "dig":
+            self.dig_terrain_at(x, y)
         else:
-            self.perform_build_order(tool, x, y, start_animation=False)
+            built = self.perform_build_order(tool, x, y, start_animation=False)
+            if not built and tool == "road":
+                self.road_directions.pop((x, y), None)
 
     def has_adjacent_road(self, x: int, y: int) -> bool:
         return any((x + dx, y + dy) in self.roads
@@ -885,7 +981,7 @@ class CityGame:
 
     def act_on_tile(self, x: int, y: int) -> None:
         """Compatibility entry point: work modes now queue actions instead of executing instantly."""
-        if self.tool in ("clear", "road", "house"):
+        if self.tool in ("clear", "road", "house", "dig"):
             self.toggle_work_order(self.tool, x, y)
 
     def check_tutorial(self) -> None:
@@ -894,11 +990,11 @@ class CityGame:
         if self.tutorial_step == 1 and self.tutorial_removed >= 2:
             self.tutorial_step = 2
             self.tool = "road"
-            self.notify("좋아요! 이제 도로 타일 3개를 배치하세요.", 4)
+            self.notify("도로 3칸을 배치하세요. 도로는 목재 1개, 집은 목재와 석재가 필요해요.", 4)
         elif self.tutorial_step == 2 and self.tutorial_roads >= 3:
             self.tutorial_step = 3
             self.tool = "house"
-            self.notify("도로가 준비됐어요. 도로 옆에 집을 지어보세요.", 4)
+            self.notify("도로가 준비됐어요. 집에는 목재 1개와 석재 1개가 필요해요.", 4)
         elif self.tutorial_step == 3 and self.tutorial_house_built:
             self.tutorial_step = 4
             self.tutorial_done = True
@@ -923,11 +1019,15 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 5,
+            "version": 6,
             "seed": self.seed,
             "trees": [list(p) for p in sorted(self.trees)],
             "rocks": [list(p) for p in sorted(self.rocks)],
             "roads": [list(p) for p in sorted(self.roads)],
+            "road_direction": self.road_direction,
+            "road_directions": [
+                [x, y, axis] for (x, y), axis in sorted(self.road_directions.items())
+            ],
             "houses": [list(p) for p in sorted(self.houses)],
             "expand_level": self.expand_level,
             "money": self.money,
@@ -960,6 +1060,18 @@ class CityGame:
             self.trees = {tuple(p) for p in data.get("trees", [])}
             self.rocks = {tuple(p) for p in data.get("rocks", [])}
             self.roads = {tuple(p) for p in data.get("roads", [])}
+            self.road_direction = data.get("road_direction", "x")
+            if self.road_direction not in ("x", "y"):
+                self.road_direction = "x"
+            self.road_directions = {}
+            saved_road_directions = data.get("road_directions", [])
+            if isinstance(saved_road_directions, list):
+                for entry in saved_road_directions:
+                    if (isinstance(entry, list) and len(entry) == 3
+                            and type(entry[0]) is int and type(entry[1]) is int
+                            and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H
+                            and entry[2] in ("x", "y")):
+                        self.road_directions[(entry[0], entry[1])] = entry[2]
             self.houses = {tuple(p) for p in data.get("houses", [])}
             self.expand_level = int(data.get("expand_level", 0))
             self.money = int(data.get("money", 100000))
@@ -995,7 +1107,7 @@ class CityGame:
                         continue
                     tool = order.get("tool")
                     x, y = order.get("x"), order.get("y")
-                    if (tool not in ("clear", "road", "house")
+                    if (tool not in ("clear", "road", "house", "dig")
                             or type(x) is not int or type(y) is not int
                             or not (0 <= x < MAP_W and 0 <= y < MAP_H)
                             or not self.is_unlocked(x, y)):
@@ -1004,11 +1116,15 @@ class CityGame:
                         continue
                     if tool == "clear" and (x, y) not in self.trees and (x, y) not in self.rocks:
                         continue
+                    if tool == "dig" and not self.can_dig_terrain(x, y):
+                        continue
                     if tool in ("road", "house") and not self.can_build_on(x, y):
                         continue
                     if tool == "house" and not self.has_planned_adjacent_road(x, y):
                         continue
                     self.work_queue.append((tool, x, y))
+                    if tool == "road":
+                        self.road_directions.setdefault((x, y), self.road_direction)
 
             self.tutorial_step = int(data.get("tutorial_step", 0))
             self.tutorial_done = bool(data.get("tutorial_done", False))
@@ -1185,15 +1301,17 @@ class CityGame:
         if len(inner) >= 3:
             pygame.draw.polygon(self.canvas, C["road"], inner)
 
-        # Dashed yellow center markings follow only actual road connections.
-        # A corner, T-junction, or crossroads is formed automatically by the
-        # connected half-lines meeting at the center of this tile.
+        # The center marking follows the orientation chosen when this tile
+        # was reserved: grid-X is screen ↘/↖, grid-Y is screen ↙/↗.
+        # The connected road surface remains automatic and independent of lane axis.
         center = (round(cx), round(cy))
         dash_length = max(2.0, 4.0 * z)
         dash_gap = max(1.5, 2.8 * z)
         line_width = max(1, round(1.4 * z))
+        road_axis = self.road_directions.get((x, y), "x")
+        lane_sides = ("east", "west") if road_axis == "x" else ("south", "north")
         for name, _neighbor, _a, _b, dx, dy in side_specs:
-            if not connected[name]:
+            if name not in lane_sides:
                 continue
             length = math.hypot(dx, dy)
             if length <= 0:
@@ -1557,13 +1675,30 @@ class CityGame:
                     allowed = self.can_build_on(x, y)
                 elif self.tool == "clear":
                     allowed = (x, y) in self.trees or (x, y) in self.rocks
+                elif self.tool == "dig":
+                    allowed = self.can_dig_terrain(x, y)
                 else:
                     allowed = self.worker_can_stand(x, y)
-                if self.tool == "clear" and (x, y) in self.work_queue:
+                if any(order[1] == x and order[2] == y for order in self.work_queue):
                     color = C["gold"]
                 else:
                     color = C["green"] if allowed else C["red"]
                 pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
+                if self.tool == "road" and allowed:
+                    if self.road_direction == "x":
+                        start = (round(cx - TILE_W * self.zoom * 0.18),
+                                 round(cy - TILE_H * self.zoom * 0.18))
+                        end = (round(cx + TILE_W * self.zoom * 0.18),
+                               round(cy + TILE_H * self.zoom * 0.18))
+                    else:
+                        start = (round(cx - TILE_W * self.zoom * 0.18),
+                                 round(cy + TILE_H * self.zoom * 0.18))
+                        end = (round(cx + TILE_W * self.zoom * 0.18),
+                               round(cy - TILE_H * self.zoom * 0.18))
+                    pygame.draw.line(
+                        self.canvas, C["road_center"], start, end,
+                        max(1, round(2 * self.zoom))
+                    )
 
         # Tutorial card.
         self.draw_tutorial_card()
@@ -1575,6 +1710,7 @@ class CityGame:
             "clear": C["gold"],
             "road": (190, 198, 190),
             "house": (238, 151, 111),
+            "dig": (147, 158, 166),
         }
         for index, (tool, x, y) in enumerate(self.work_queue, start=1):
             if not self.is_unlocked(x, y):
@@ -1653,8 +1789,8 @@ class CityGame:
         tasks = [
             ("1. 캐릭터 이동하기", "[이동] 모드에서 빈 땅을 클릭해 보세요."),
             (f"2. 나무 제거하기 ({min(self.tutorial_removed,2)}/2)", "[제거] 도구로 나무 2개를 치우세요."),
-            (f"3. 도로 배치하기 ({min(self.tutorial_roads,3)}/3)", "[도로] 도구로 도로 3칸을 놓으세요."),
-            ("4. 첫 번째 집 건설하기", "도로 옆에 [집]을 지으세요."),
+            (f"3. 도로 배치하기 ({min(self.tutorial_roads,3)}/3)", "도로는 목재 1개, 집은 목재·석재가 필요해요."),
+            ("4. 첫 번째 집 건설하기", "도로 옆에 집을 지으세요. 바위는 [제거]로!"),
         ]
         title, hint = tasks[min(self.tutorial_step, 3)]
         self.text(self.canvas, title, 15, 62, 10, C["white"])
@@ -1667,9 +1803,10 @@ class CityGame:
         self.text(self.canvas, "PIXEL CITY", 8, 5, 13, C["gold"])
         self.text(self.canvas, f"₩{self.money:,}", 132, 6, 11, C["white"])
         self.text(self.canvas, f"인구 {self.population}", 230, 7, 10, C["text"])
-        self.text(self.canvas, f"목재 {self.wood}", 314, 7, 9, C["muted"])
-        self.text(self.canvas, f"DAY {self.day}", 385, 7, 9, C["muted"])
-        self.text(self.canvas, f"시드 {self.seed}", 432, 7, 9, C["muted"])
+        self.text(self.canvas, f"목재 {self.wood}", 302, 7, 9, C["muted"])
+        self.text(self.canvas, f"석재 {self.stone}", 359, 7, 9, C["muted"])
+        self.text(self.canvas, f"DAY {self.day}", 416, 7, 9, C["muted"])
+        self.text(self.canvas, f"시드 {self.seed}", 462, 7, 9, C["muted"])
         self.button(pygame.Rect(531, 5, 39, 21), "시드", small=True)
         self.button(pygame.Rect(573, 5, 29, 21), "저장", small=True)
         self.button(pygame.Rect(605, 5, 31, 21), "불러", small=True)
@@ -1677,15 +1814,18 @@ class CityGame:
         # Bottom tool bar.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, BOTTOM_Y), (LOGICAL_W, BOTTOM_Y), 1)
-        xs = [8, 94, 180, 266]
+        xs = [8, 78, 148, 218, 288]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
-            self.button(pygame.Rect(xs[i], 294, 80, 23), name, self.tool == key)
+            self.button(pygame.Rect(xs[i], 294, 66, 23), name, self.tool == key, small=True)
+        # Road axis is selectable with this button or the R key.
+        road_arrow = "↘" if self.road_direction == "x" else "↙"
+        self.button(pygame.Rect(360, 294, 66, 23), f"방향 {road_arrow}",
+                    self.tool == "road", small=True)
         # Expansion is a separate utility button and does not replace the tool mode.
         cost_text = "최대" if self.expand_level >= 3 else f"₩{[5000,15000,35000][self.expand_level]:,}"
-        self.button(pygame.Rect(408, 294, 86, 23), "땅 확장", small=True)
-        self.text(self.canvas, cost_text, 451, 326, 9, C["gold"], center=True)
-        self.text(self.canvas, f"석재 {self.stone}", 550, 326, 9, C["muted"], center=True)
-        self.text(self.canvas, f"예약 {len(self.work_queue)}", 610, 326, 9, C["gold"], center=True)
+        self.button(pygame.Rect(434, 294, 80, 23), "땅 확장", small=True)
+        self.text(self.canvas, cost_text, 474, 326, 9, C["gold"], center=True)
+        self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
         self.text(self.canvas, hint, 10, 327, 9, C["text"])
 
@@ -1735,12 +1875,15 @@ class CityGame:
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
-                tool_xs = [8, 94, 180, 266]
+                tool_xs = [8, 78, 148, 218, 288]
                 for i, tx in enumerate(tool_xs):
-                    if tx <= x <= tx + 80:
+                    if tx <= x <= tx + 66:
                         self.select_tool(TOOL_KEYS[i])
                         return
-            if 408 <= x <= 494 and 294 <= y <= 317:
+                if 360 <= x <= 426:
+                    self.toggle_road_direction()
+                    return
+            if 434 <= x <= 514 and 294 <= y <= 317:
                 self.expand_land()
                 return
             return
@@ -1751,6 +1894,12 @@ class CityGame:
                     self.set_worker_destination(*tile)
                 else:
                     self.toggle_work_order(self.tool, *tile)
+
+    def toggle_road_direction(self) -> None:
+        """Switch the road lane between the two isometric grid axes."""
+        self.road_direction = "y" if self.road_direction == "x" else "x"
+        arrow = "↘" if self.road_direction == "x" else "↙"
+        self.notify(f"도로 방향을 {arrow} 축으로 설정했어요. (R 키로 전환)", 2.2)
 
     def change_zoom(self, direction: int, mouse_logical: Tuple[int, int]) -> None:
         old_zoom = self.zoom
@@ -1804,6 +1953,10 @@ class CityGame:
                         self.select_tool("road")
                     elif event.key == pygame.K_F4:
                         self.select_tool("house")
+                    elif event.key == pygame.K_F6:
+                        self.select_tool("dig")
+                    elif event.key == pygame.K_r:
+                        self.toggle_road_direction()
                     elif event.key == pygame.K_1:
                         self.select_tool("move")
                     elif event.key == pygame.K_2:
@@ -1812,6 +1965,8 @@ class CityGame:
                         self.select_tool("road")
                     elif event.key == pygame.K_4:
                         self.select_tool("house")
+                    elif event.key == pygame.K_5:
+                        self.select_tool("dig")
                     elif event.key == pygame.K_F5:
                         self.save_game()
                     elif event.key == pygame.K_F9:
