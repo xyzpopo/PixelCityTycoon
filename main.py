@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+from array import array
 import os
 import random
 import sys
@@ -38,6 +39,8 @@ ZOOM_LEVELS = [0.70, 0.82, 0.94, 1.06, 1.18, 1.30]
 WORKER_SIZE = 0.76
 ACTION_RANGE = 3
 MAX_WORK_QUEUE = 50
+WORK_ACTION_DURATION = 0.86
+WORK_ACTION_HIT_TIMES = {"chop": 0.47, "mine": 0.44, "build": 0.52}
 
 # Palette: restrained 16-bit-inspired colors.
 C = {
@@ -100,6 +103,8 @@ class TileInfo:
 class CityGame:
     def __init__(self) -> None:
         pygame.init()
+        self.worker_sounds: Dict[str, pygame.mixer.Sound] = {}
+        self.init_worker_sounds()
         pygame.display.set_caption(APP_NAME + " - Prototype 0.1")
         self.window = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.canvas = pygame.Surface((LOGICAL_W, LOGICAL_H))
@@ -138,6 +143,8 @@ class CityGame:
         self.worker_moved = False
         self.worker_action = "idle"
         self.worker_action_timer = 0.0
+        self.worker_action_elapsed = 0.0
+        self.worker_action_hit_played = False
         self.work_queue: List[Tuple[str, int, int]] = []
         self.work_path_active = False
         self.dragging = False
@@ -197,8 +204,69 @@ class CityGame:
             mode_name = TOOL_NAMES[TOOL_KEYS.index(tool)].split(" ", 1)[1]
             self.notify(f"{mode_name} 모드", 1.2)
 
+    def init_worker_sounds(self) -> None:
+        """Create small procedural work sounds; audio failure never blocks startup."""
+        try:
+            if pygame.mixer.get_init() is None:
+                pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
+            mixer_info = pygame.mixer.get_init()
+            if mixer_info is None:
+                return
+            sample_rate, sample_format, channels = mixer_info
+            if sample_format != -16:
+                return
+
+            specifications = {
+                "chop": (145.0, 72.0, 0.22, 0.48, 0.46),
+                "mine": (980.0, 410.0, 0.24, 0.40, 0.24),
+                "build": (235.0, 105.0, 0.17, 0.46, 0.34),
+            }
+            for index, (name, spec) in enumerate(specifications.items()):
+                self.worker_sounds[name] = self.make_worker_sound(
+                    sample_rate, channels, *spec, seed=1201 + index
+                )
+        except (pygame.error, OSError, ValueError):
+            self.worker_sounds = {}
+
+    def make_worker_sound(
+        self,
+        sample_rate: int,
+        channels: int,
+        start_frequency: float,
+        end_frequency: float,
+        duration: float,
+        volume: float,
+        noise_amount: float,
+        seed: int = 1,
+    ) -> pygame.mixer.Sound:
+        """Build a short decaying impact sound in the active mixer format."""
+        rng = random.Random(seed)
+        sample_count = max(1, int(sample_rate * duration))
+        samples = array("h")
+        phase = 0.0
+        for index in range(sample_count):
+            progress = index / sample_count
+            frequency = start_frequency + (end_frequency - start_frequency) * progress
+            phase += (2.0 * math.pi * frequency) / sample_rate
+            envelope = math.exp(-7.5 * progress)
+            tone = (math.sin(phase) * 0.82 + math.sin(phase * 2.03) * 0.18)
+            noise = (rng.random() * 2.0 - 1.0) * noise_amount * math.exp(-18.0 * progress)
+            value = int(clamp((tone * envelope * volume + noise) * 26000, -32767, 32767))
+            for _channel in range(channels):
+                samples.append(value)
+        return pygame.mixer.Sound(buffer=samples.tobytes())
+
+    def play_worker_action_sound(self, action: str) -> None:
+        sound = self.worker_sounds.get(action)
+        if sound is not None:
+            try:
+                sound.play()
+            except pygame.error:
+                # The visual action still works if the mixer becomes unavailable.
+                pass
+
     def start_worker_action(self, action: str, target_x: int, target_y: int) -> None:
-        """Face the target and play a short work animation."""
+        """Face the work target and begin a timed wind-up, impact and recovery."""
         wx, wy = self.worker_grid_position()
         dx, dy = target_x - wx, target_y - wy
         if abs(dx) >= abs(dy):
@@ -206,7 +274,9 @@ class CityGame:
         else:
             self.worker_facing = (0, 1 if dy >= 0 else -1)
         self.worker_action = action
-        self.worker_action_timer = 0.58
+        self.worker_action_elapsed = 0.0
+        self.worker_action_timer = WORK_ACTION_DURATION
+        self.worker_action_hit_played = False
 
     def button(self, rect: pygame.Rect, label: str, active: bool = False,
                small: bool = False) -> None:
@@ -247,6 +317,8 @@ class CityGame:
         self.worker_moved = False
         self.worker_action = "idle"
         self.worker_action_timer = 0.0
+        self.worker_action_elapsed = 0.0
+        self.worker_action_hit_played = False
         self.work_queue = []
         self.work_path_active = False
         self.tutorial_step = 0
@@ -463,6 +535,8 @@ class CityGame:
             return
 
         self.worker_path = path
+        nx, ny = path[0]
+        self.worker_facing = (nx - self.worker_x, ny - self.worker_y)
         self.worker_moved = True
 
     def update_worker(self, dt: float) -> None:
@@ -473,11 +547,10 @@ class CityGame:
 
         self.worker_move_progress += dt / 0.18
         while self.worker_path and self.worker_move_progress >= 1.0:
-            self.worker_x, self.worker_y = self.worker_path.pop(0)
+            next_x, next_y = self.worker_path.pop(0)
+            self.worker_facing = (next_x - self.worker_x, next_y - self.worker_y)
+            self.worker_x, self.worker_y = next_x, next_y
             self.worker_move_progress -= 1.0
-            if self.worker_path:
-                nx, ny = self.worker_path[0]
-                self.worker_facing = (nx - self.worker_x, ny - self.worker_y)
         if not self.worker_path:
             self.worker_move_progress = 0.0
 
@@ -1133,62 +1206,206 @@ class CityGame:
                 (wx + wy) * th / 2 + self.camera_y)
 
     def draw_worker(self) -> None:
-        """Draw a pixel worker with a two-frame walking motion."""
+        """Draw the worker with four facing directions and timed work frames."""
         cx, cy = self.worker_screen_position()
         z = self.zoom * WORKER_SIZE
         moving = bool(self.worker_path)
-        phase = time.time() * 18.0
-        stride = math.sin(phase) * 2.0 * z if moving else 0.0
-        bob = abs(math.sin(phase)) * 1.25 * z if moving else 0.0
-        foot_y = round(cy + 1 * z + bob)
+        phase = time.time() * 14.0
+        walk_swing = math.sin(phase)
+        stride = walk_swing * 2.0 * z if moving else 0.0
+        bob = abs(walk_swing) * 1.15 * z if moving else 0.0
 
-        # Ground shadow.
+        facing_x, facing_y = self.worker_facing
+        screen_direction = facing_x - facing_y
+        screen_side = 1 if screen_direction >= 0 else -1
+        facing_front = (facing_x + facing_y) > 0
+        # The four grid directions become front-left/front-right/back-left/back-right
+        # in the isometric view.
+        body_offset = screen_side * 0.45 * z
+        body_y = cy - 12.0 * z + bob
+        foot_y = round(cy + 1.0 * z + bob)
+
         pygame.draw.ellipse(
             self.canvas, (44, 57, 48),
             (round(cx - 5*z), round(cy - 1*z), max(3, round(10*z)), max(2, round(4*z)))
         )
-        # Alternating legs and swinging arms create the walking animation.
-        pygame.draw.rect(self.canvas, (54, 49, 48),
-                         (round(cx - 3*z - stride), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
-        pygame.draw.rect(self.canvas, (54, 49, 48),
-                         (round(cx + 1*z + stride), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
-        pygame.draw.rect(self.canvas, (44, 91, 125),
-                         (round(cx - 4*z), round(cy - 12*z + bob), max(5, round(8*z)), max(6, round(8*z))))
-        # Left arm remains visible. The right arm is either resting or animated,
-        # never both at once, so work actions do not create a third arm.
-        pygame.draw.rect(self.canvas, (213, 157, 111),
-                         (round(cx - 6*z - stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
-        working = self.worker_action_timer > 0
-        if not working:
-            pygame.draw.rect(self.canvas, (213, 157, 111),
-                             (round(cx + 3*z + stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
-        # During work, this animated arm replaces the resting right arm.
-        if working:
-            progress = 1.0 - self.worker_action_timer / 0.58
-            swing = math.sin(progress * math.pi)
-            shoulder = (round(cx + 2*z), round(cy - 10*z + bob))
-            hand = (round(cx + (4 + swing * 5)*z), round(cy - (8 + swing * 5)*z + bob))
-            pygame.draw.line(self.canvas, (213, 157, 111), shoulder, hand, max(1, round(2*z)))
-            if self.worker_action in ("chop", "mine"):
-                handle_end = (hand[0] + round(3*z), hand[1] - round(5*z))
-                pygame.draw.line(self.canvas, (112, 73, 42), hand, handle_end, max(1, round(2*z)))
-                head_rect = pygame.Rect(handle_end[0] - round(2*z), handle_end[1] - round(2*z),
-                                        max(3, round(5*z)), max(2, round(3*z)))
-                pygame.draw.rect(self.canvas, (185, 190, 184), head_rect)
-            else:
-                hammer_end = (hand[0] + round(2*z), hand[1] - round(3*z))
-                pygame.draw.line(self.canvas, (112, 73, 42), hand, hammer_end, max(1, round(2*z)))
-                pygame.draw.rect(self.canvas, (185, 190, 184),
-                                 (hammer_end[0] - round(2*z), hammer_end[1] - round(1*z),
-                                  max(4, round(5*z)), max(2, round(2*z))))
 
-        # Face and yellow safety helmet.
-        pygame.draw.rect(self.canvas, (229, 185, 143),
-                         (round(cx - 3*z), round(cy - 18*z + bob), max(4, round(6*z)), max(5, round(6*z))))
-        pygame.draw.rect(self.canvas, (228, 174, 55),
-                         (round(cx - 4*z), round(cy - 20*z + bob), max(6, round(8*z)), max(2, round(3*z))))
-        pygame.draw.rect(self.canvas, (245, 205, 95),
-                         (round(cx - 1*z), round(cy - 20*z + bob), max(2, round(2*z)), max(1, round(2*z))))
+        # Walking legs alternate; their screen-side order follows the facing.
+        near_stride = stride * screen_side
+        pygame.draw.rect(
+            self.canvas, (54, 49, 48),
+            (round(cx - 2.5*z - near_stride), foot_y - round(4*z),
+             max(2, round(3*z)), max(3, round(4*z)))
+        )
+        pygame.draw.rect(
+            self.canvas, (69, 59, 53),
+            (round(cx + 0.5*z + near_stride), foot_y - round(4*z),
+             max(2, round(3*z)), max(3, round(4*z)))
+        )
+
+        # Side-facing views are narrower; the torso shifts toward the leading side.
+        body_width = max(5, round((7.0 if abs(screen_direction) else 8.0) * z))
+        body_rect = pygame.Rect(
+            round(cx - body_width / 2 + body_offset),
+            round(body_y),
+            body_width,
+            max(6, round(8*z))
+        )
+        pygame.draw.rect(self.canvas, (35, 75, 105), body_rect)
+        pygame.draw.rect(
+            self.canvas, (61, 111, 139),
+            (body_rect.x, body_rect.y, body_rect.width, max(2, round(2*z)))
+        )
+        if not facing_front:
+            # Back view: a dark collar/back seam replaces facial details.
+            pygame.draw.rect(
+                self.canvas, (29, 58, 76),
+                (round(cx - 2*z + body_offset), round(body_y + 2*z),
+                 max(3, round(4*z)), max(2, round(2*z)))
+            )
+
+        working = self.worker_action_timer > 0
+        action_progress = clamp(
+            self.worker_action_elapsed / WORK_ACTION_DURATION, 0.0, 1.0
+        ) if working else 0.0
+
+        # The non-working arm swings while walking. The working arm is drawn
+        # separately below and replaces its resting counterpart.
+        arm_swing = walk_swing * 1.4 * z if moving and not working else 0.0
+        shoulder_y = body_y + 1.2*z
+        left_arm_x = cx - 5.0*z + body_offset
+        right_arm_x = cx + 3.0*z + body_offset
+        active_arm_x = right_arm_x if screen_side > 0 else left_arm_x
+        resting_arm_x = left_arm_x if screen_side > 0 else right_arm_x
+
+        pygame.draw.rect(
+            self.canvas, (213, 157, 111),
+            (round(resting_arm_x), round(shoulder_y + arm_swing),
+             max(2, round(3*z)), max(4, round(5*z)))
+        )
+
+        if not working:
+            pygame.draw.rect(
+                self.canvas, (213, 157, 111),
+                (round(active_arm_x), round(shoulder_y - arm_swing),
+                 max(2, round(3*z)), max(4, round(5*z)))
+            )
+        else:
+            # Wind-up (0-0.36), impact stroke (0.36-0.60), recovery (0.60-1).
+            if action_progress < 0.36:
+                t = action_progress / 0.36
+                hand_y_offset = -8.0 - 7.0 * t
+                hand_x_offset = 4.0 + 1.5 * t
+            elif action_progress < 0.60:
+                t = (action_progress - 0.36) / 0.24
+                hand_y_offset = -15.0 + 9.0 * t
+                hand_x_offset = 5.5 - 1.5 * t
+            else:
+                t = (action_progress - 0.60) / 0.40
+                hand_y_offset = -6.0 - 2.0 * t
+                hand_x_offset = 4.0
+
+            shoulder = (
+                round(cx + screen_side * 2.7*z + body_offset),
+                round(shoulder_y)
+            )
+            hand = (
+                round(cx + screen_side * hand_x_offset*z + body_offset),
+                round(cy + hand_y_offset*z + bob)
+            )
+            pygame.draw.line(
+                self.canvas, (213, 157, 111), shoulder, hand,
+                max(1, round(2.4*z))
+            )
+
+            tool_tip = (
+                hand[0] + round(screen_side * 3.0*z),
+                hand[1] - round((4.0 if action_progress < 0.48 else 1.5)*z)
+            )
+            pygame.draw.line(
+                self.canvas, (112, 73, 42), hand, tool_tip,
+                max(1, round(2*z))
+            )
+            if self.worker_action in ("chop", "mine"):
+                head_rect = pygame.Rect(
+                    tool_tip[0] - round(2*z),
+                    tool_tip[1] - round(1.5*z),
+                    max(3, round(5*z)),
+                    max(2, round(3*z))
+                )
+                pygame.draw.rect(
+                    self.canvas,
+                    (185, 190, 184) if self.worker_action == "mine" else (132, 139, 145),
+                    head_rect
+                )
+                if self.worker_action == "chop":
+                    pygame.draw.rect(
+                        self.canvas, (94, 105, 110),
+                        (head_rect.x, head_rect.y, max(2, round(2*z)), head_rect.height)
+                    )
+            else:
+                pygame.draw.rect(
+                    self.canvas, (185, 190, 184),
+                    (tool_tip[0] - round(2.5*z), tool_tip[1] - round(1*z),
+                     max(4, round(6*z)), max(2, round(2*z)))
+                )
+
+            # A brief pixel spark marks the exact strike window.
+            if 0.43 <= action_progress <= 0.62:
+                spark_x, spark_y = tool_tip[0], tool_tip[1] + round(2*z)
+                pygame.draw.line(
+                    self.canvas, C["gold"],
+                    (spark_x - round(3*z), spark_y),
+                    (spark_x + round(3*z), spark_y),
+                    max(1, round(z))
+                )
+                pygame.draw.line(
+                    self.canvas, C["white"],
+                    (spark_x, spark_y - round(3*z)),
+                    (spark_x, spark_y + round(3*z)),
+                    max(1, round(z))
+                )
+
+        # Helmet and head change details according to the four-way facing.
+        head_x = cx + body_offset * 0.55
+        head_rect = pygame.Rect(
+            round(head_x - 3.0*z), round(cy - 18.0*z + bob),
+            max(4, round(6*z)), max(5, round(6*z))
+        )
+        pygame.draw.rect(self.canvas, (229, 185, 143), head_rect)
+        if facing_front:
+            # Front-facing worker: eyes and a tiny nose appear on the leading side.
+            eye_y = head_rect.y + max(2, round(3*z))
+            pygame.draw.rect(
+                self.canvas, (61, 52, 47),
+                (head_rect.centerx - max(2, round(1.5*z)), eye_y, max(1, round(z)), max(1, round(z)))
+            )
+            pygame.draw.rect(
+                self.canvas, (61, 52, 47),
+                (head_rect.centerx + max(1, round(1.0*z)), eye_y, max(1, round(z)), max(1, round(z)))
+            )
+            pygame.draw.rect(
+                self.canvas, (195, 121, 92),
+                (round(head_x + screen_side*2.2*z), round(head_rect.centery),
+                 max(1, round(z)), max(1, round(z)))
+            )
+        else:
+            # Back-facing worker: no eyes; show the back rim of the safety helmet.
+            pygame.draw.rect(
+                self.canvas, (171, 119, 69),
+                (round(head_x - 2*z), round(head_rect.bottom - 2*z),
+                 max(4, round(4*z)), max(1, round(z)))
+            )
+
+        helmet_y = round(cy - 20.0*z + bob)
+        pygame.draw.rect(
+            self.canvas, (228, 174, 55),
+            (round(head_x - 4*z), helmet_y, max(6, round(8*z)), max(2, round(3*z)))
+        )
+        pygame.draw.rect(
+            self.canvas, (245, 205, 95),
+            (round(head_x - 1*z), helmet_y, max(2, round(2*z)), max(1, round(2*z)))
+        )
 
     def draw_world(self) -> None:
         self.canvas.fill(C["sky"])
@@ -1595,9 +1812,24 @@ class CityGame:
     def update(self, dt: float) -> None:
         self.update_worker(dt)
         if self.worker_action_timer > 0:
-            self.worker_action_timer = max(0.0, self.worker_action_timer - dt)
+            self.worker_action_elapsed = min(
+                WORK_ACTION_DURATION,
+                self.worker_action_elapsed + max(0.0, dt)
+            )
+            self.worker_action_timer = max(
+                0.0, WORK_ACTION_DURATION - self.worker_action_elapsed
+            )
+            hit_time = WORK_ACTION_HIT_TIMES.get(
+                self.worker_action, WORK_ACTION_DURATION * 0.55
+            )
+            if (not self.worker_action_hit_played
+                    and self.worker_action_elapsed >= hit_time):
+                self.worker_action_hit_played = True
+                self.play_worker_action_sound(self.worker_action)
             if self.worker_action_timer == 0.0:
                 self.worker_action = "idle"
+                self.worker_action_elapsed = 0.0
+                self.worker_action_hit_played = False
         self.update_work_queue()
         # Accelerated clock: six in-game minutes pass per real second.
         now = time.time()
