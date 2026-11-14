@@ -684,7 +684,7 @@ class CityGame:
         return True, ""
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
-        """Queue or cancel a clear, road, or house action at any unlocked distance."""
+        """Queue or cancel a clear, road, house, or terrain-dig action."""
         if tool not in ("clear", "road", "house", "dig"):
             return
 
@@ -740,7 +740,7 @@ class CityGame:
     def find_worker_path_to_work_target(
         self, target: Tuple[int, int]
     ) -> Optional[List[Tuple[int, int]]]:
-        """Find a path beside a tree/rock, with a short-range fallback."""
+        """Find a path beside a resource or dig site, with a short-range fallback."""
         tx, ty = target
         start = (self.worker_x, self.worker_y)
         adjacent_positions = {
@@ -1303,6 +1303,7 @@ class CityGame:
 
         # The center marking follows the orientation chosen when this tile
         # was reserved: grid-X is screen ↘/↖, grid-Y is screen ↙/↗.
+        # The connected road surface remains automatic and independent of lane axis.
         center = (round(cx), round(cy))
         dash_length = max(2.0, 4.0 * z)
         dash_gap = max(1.5, 2.8 * z)
