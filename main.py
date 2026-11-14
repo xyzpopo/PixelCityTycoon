@@ -742,17 +742,44 @@ class CityGame:
         pygame.draw.line(self.canvas, (177, 181, 167), pts[1], pts[2], max(1, round(z)))
 
     def draw_road(self, x: int, y: int) -> None:
+        """Draw a road tile whose arms connect automatically to adjacent roads."""
         cx, cy = self.tile_to_screen(x, y)
-        tw, th = TILE_W * self.zoom, TILE_H * self.zoom
-        inset = 2 * self.zoom
-        pts = self.diamond(cx, cy, tw - inset * 2, th - inset)
-        pygame.draw.polygon(self.canvas, C["road_edge"], pts)
-        inner = self.diamond(cx, cy - self.zoom, tw - inset * 2.5, th - inset * 1.7)
-        pygame.draw.polygon(self.canvas, C["road"], inner)
-        if (x + y) % 3 == 0:
+        z = self.zoom
+        tw, th = TILE_W * z, TILE_H * z
+
+        # The four neighboring isometric tiles meet at these edge midpoints.
+        # Drawing matching arms to each midpoint makes adjoining roads join
+        # seamlessly without storing any extra connection data in the save.
+        neighbors = (
+            (x + 1, y, tw * 0.25, th * 0.25),
+            (x - 1, y, -tw * 0.25, -th * 0.25),
+            (x, y + 1, -tw * 0.25, th * 0.25),
+            (x, y - 1, tw * 0.25, -th * 0.25),
+        )
+        edge_width = max(4, round(10 * z))
+        road_width = max(2, round(7 * z))
+        center = (round(cx), round(cy))
+
+        for nx, ny, dx, dy in neighbors:
+            if (nx, ny) not in self.roads or not self.is_unlocked(nx, ny):
+                continue
+            endpoint = (round(cx + dx), round(cy + dy))
+            pygame.draw.line(self.canvas, C["road_edge"], center, endpoint, edge_width)
+            pygame.draw.line(self.canvas, C["road"], center, endpoint, road_width)
+
+        # A small diamond hub keeps junctions continuous and gives isolated
+        # road tiles a visible paved center.
+        hub = self.diamond(cx, cy, max(7, tw * 0.34), max(5, th * 0.62))
+        pygame.draw.polygon(self.canvas, C["road_edge"], hub)
+        inner_hub = self.diamond(cx, cy - 0.4 * z,
+                                 max(5, tw * 0.25), max(4, th * 0.43))
+        pygame.draw.polygon(self.canvas, C["road"], inner_hub)
+
+        # Subtle paving fleck, fixed to the tile so it does not flicker.
+        if (x * 3 + y * 5) % 4 == 0:
             pygame.draw.rect(self.canvas, C["road_light"],
-                             (round(cx - 2*self.zoom), round(cy - self.zoom),
-                              max(1, round(4*self.zoom)), max(1, round(self.zoom))))
+                             (round(cx - z), round(cy - 0.5 * z),
+                              max(1, round(2 * z)), max(1, round(z))))
 
     def draw_house(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
