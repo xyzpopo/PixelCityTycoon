@@ -536,59 +536,86 @@ class CityGame:
             return
 
         self.removal_queue.append(target)
-        self.notify(f"제거 예약 {len(self.removal_queue)}개 · 클릭한 순서대로 작업합니다.", 2.5)
+        if not self.worker_can_reach(x, y):
+            self.notify(
+                f"원거리 제거 예약 {len(self.removal_queue)}개 · 작업자가 직접 이동합니다.",
+                2.8
+            )
+        else:
+            self.notify(f"제거 예약 {len(self.removal_queue)}개 · 클릭한 순서대로 작업합니다.", 2.5)
 
     def find_worker_path_to_work_target(
         self, target: Tuple[int, int]
     ) -> Optional[List[Tuple[int, int]]]:
-        """Find the shortest path to any walkable tile within work range of a target."""
+        """Find a path to a tile beside the resource, with a close-range fallback."""
         tx, ty = target
-        work_positions = {
+        start = (self.worker_x, self.worker_y)
+
+        # First preference: stand directly next to the tree/rock, so long-range
+        # orders visibly send the worker all the way to the resource.
+        adjacent_positions = {
+            (tx + dx, ty + dy)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+            if self.worker_can_stand(tx + dx, ty + dy)
+        }
+
+        # Fallback: if all four adjacent tiles are blocked, use any reachable
+        # standing tile within the normal three-tile work radius.
+        fallback_positions = {
             (tx + dx, ty + dy)
             for dx in range(-ACTION_RANGE, ACTION_RANGE + 1)
             for dy in range(-ACTION_RANGE, ACTION_RANGE + 1)
-            if abs(dx) + abs(dy) <= ACTION_RANGE
+            if 1 < abs(dx) + abs(dy) <= ACTION_RANGE
             and self.worker_can_stand(tx + dx, ty + dy)
         }
-        if not work_positions:
-            return None
 
-        start = (self.worker_x, self.worker_y)
-        if start in work_positions:
-            return []
-
-        frontier = [start]
-        came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
-        head = 0
-        goal: Optional[Tuple[int, int]] = None
-        while head < len(frontier):
-            current = frontier[head]
-            head += 1
-            if current in work_positions:
-                goal = current
-                break
-
-            x, y = current
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                nxt = (x + dx, y + dy)
-                if nxt in came_from or not self.worker_can_stand(*nxt):
-                    continue
-                came_from[nxt] = current
-                frontier.append(nxt)
-
-        if goal is None:
-            return None
-
-        path: List[Tuple[int, int]] = []
-        current = goal
-        while current != start:
-            path.append(current)
-            previous = came_from[current]
-            if previous is None:
+        def search_positions(
+            work_positions: Set[Tuple[int, int]]
+        ) -> Optional[List[Tuple[int, int]]]:
+            if not work_positions:
                 return None
-            current = previous
-        path.reverse()
-        return path
+            if start in work_positions:
+                return []
+
+            frontier = [start]
+            came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+            head = 0
+            goal: Optional[Tuple[int, int]] = None
+            while head < len(frontier):
+                current = frontier[head]
+                head += 1
+                if current in work_positions:
+                    goal = current
+                    break
+
+                x, y = current
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nxt = (x + dx, y + dy)
+                    if nxt in came_from or not self.worker_can_stand(*nxt):
+                        continue
+                    came_from[nxt] = current
+                    frontier.append(nxt)
+
+            if goal is None:
+                return None
+
+            path: List[Tuple[int, int]] = []
+            current = goal
+            while current != start:
+                path.append(current)
+                previous = came_from[current]
+                if previous is None:
+                    return None
+                current = previous
+            path.reverse()
+            return path
+
+        # An adjacent route always wins. Only fall back to a three-tile work
+        # position when no directly adjacent position can be reached.
+        adjacent_path = search_positions(adjacent_positions)
+        if adjacent_path is not None:
+            return adjacent_path
+        return search_positions(fallback_positions)
 
     def remove_resource_at(self, x: int, y: int) -> bool:
         """Remove a tree or rock and apply the usual rewards/tutorial progress."""
@@ -622,12 +649,9 @@ class CityGame:
             return
 
         target = self.removal_queue[0]
-        if self.worker_can_reach(*target):
-            self.removal_queue.pop(0)
-            self.removal_path_active = False
-            self.remove_resource_at(*target)
-            return
-
+        # Do not use the ordinary action-range shortcut here: the automatic
+        # worker should approach the resource first, even if it is already
+        # technically within three tiles.
         path = self.find_worker_path_to_work_target(target)
         if path is None:
             self.removal_queue.pop(0)
