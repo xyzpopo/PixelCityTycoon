@@ -69,14 +69,13 @@ C = {
     "white": (255, 255, 245),
 }
 
-TOOL_NAMES = ["둘러보기", "제거", "도로", "집", "확장"]
-TOOL_KEYS = ["inspect", "clear", "road", "house", "expand"]
+TOOL_NAMES = ["이동", "제거", "도로", "집"]
+TOOL_KEYS = ["move", "clear", "road", "house"]
 TOOL_HINTS = {
-    "inspect": "맵을 둘러보세요. 드래그 또는 WASD로 이동할 수 있어요.",
-    "clear": "나무나 바위를 클릭하면 제거할 수 있어요.",
-    "road": "잔디 타일을 클릭해 도로를 놓으세요.",
-    "house": "도로와 인접한 빈 땅에 집을 지으세요.",
-    "expand": "아래의 확장 버튼으로 주변 지형을 개척하세요.",
+    "move": "이동 모드: 목적지를 클릭하면 캐릭터가 길을 따라 걸어갑니다.",
+    "clear": "제거 모드: 나무나 바위를 클릭해 자원을 얻으세요.",
+    "road": "도로 모드: 빈 잔디 타일을 클릭해 도로를 건설하세요.",
+    "house": "집 모드: 도로 옆 빈 땅을 클릭해 집을 건설하세요.",
 }
 
 
@@ -126,15 +125,15 @@ class CityGame:
         self.zoom = ZOOM_LEVELS[self.zoom_index]
         self.camera_x = 0.0
         self.camera_y = 0.0
-        self.tool = "inspect"
+        self.tool = "move"
         self.worker_x = MAP_W // 2
         self.worker_y = MAP_H // 2
         self.worker_facing = (1, 0)
-        self.worker_control = False
-        self.worker_anim = 0.0
+        self.worker_path: List[Tuple[int, int]] = []
+        self.worker_move_progress = 0.0
+        self.worker_moved = False
         self.dragging = False
         self.last_mouse = (0, 0)
-        self.camera_used = False
         self.modal_seed = False
         self.seed_text = ""
         self.notice = "새로운 도시를 시작해 보세요!"
@@ -210,12 +209,13 @@ class CityGame:
         self.stone = 0
         self.day = 1
         self.game_minutes = 8 * 60
-        self.tool = "inspect"
+        self.tool = "move"
         self.worker_x = MAP_W // 2
         self.worker_y = MAP_H // 2
         self.worker_facing = (1, 0)
-        self.worker_control = False
-        self.worker_anim = 0.0
+        self.worker_path = []
+        self.worker_move_progress = 0.0
+        self.worker_moved = False
         self.tutorial_step = 0
         self.tutorial_done = False
         self.tutorial_removed = 0
@@ -366,31 +366,84 @@ class CityGame:
             return False
         return True
 
-    def move_worker(self, dx: int, dy: int) -> None:
-        """Move one tile in isometric grid coordinates."""
-        self.worker_facing = (dx, dy)
-        nx, ny = self.worker_x + dx, self.worker_y + dy
-        if not self.worker_can_stand(nx, ny):
-            return
-        self.worker_x, self.worker_y = nx, ny
-        self.worker_anim = 0.22
+    def find_worker_path(self, goal: Tuple[int, int]) -> Optional[List[Tuple[int, int]]]:
+        """Find a four-direction path with BFS. Trees, rocks, houses and terrain block movement."""
+        start = (self.worker_x, self.worker_y)
+        if goal == start:
+            return []
+        if not self.worker_can_stand(*goal):
+            return None
 
-    def worker_interact(self) -> None:
-        """Collect a tree or rock directly in front of the worker."""
-        dx, dy = self.worker_facing
-        target = (self.worker_x + dx, self.worker_y + dy)
-        if target in self.trees:
-            self.trees.remove(target)
-            self.wood += 2
-            self.tutorial_removed += 1
-            self.notify("작업자가 나무를 베었어요! 목재 +2")
-            self.check_tutorial()
-        elif target in self.rocks:
-            self.rocks.remove(target)
-            self.stone += 2
-            self.notify("작업자가 바위를 채취했어요! 석재 +2")
-        else:
-            self.notify("바로 앞에 채집할 나무나 바위가 없어요.", 1.5)
+        frontier = [start]
+        came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+        head = 0
+        while head < len(frontier):
+            current = frontier[head]
+            head += 1
+            if current == goal:
+                break
+
+            x, y = current
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt = (x + dx, y + dy)
+                if nxt in came_from or not self.worker_can_stand(*nxt):
+                    continue
+                came_from[nxt] = current
+                frontier.append(nxt)
+
+        if goal not in came_from:
+            return None
+
+        path: List[Tuple[int, int]] = []
+        current = goal
+        while current != start:
+            path.append(current)
+            previous = came_from[current]
+            if previous is None:
+                return None
+            current = previous
+        path.reverse()
+        return path
+
+    def set_worker_destination(self, x: int, y: int) -> None:
+        """Set a click-to-move destination. This is only called in move mode."""
+        goal = (x, y)
+        if goal == (self.worker_x, self.worker_y) and not self.worker_path:
+            return
+
+        # When a new destination is chosen mid-step, settle at the nearer tile
+        # before calculating the new route so the character never teleports.
+        if self.worker_path:
+            if self.worker_move_progress >= 0.5:
+                self.worker_x, self.worker_y = self.worker_path[0]
+            self.worker_path.clear()
+            self.worker_move_progress = 0.0
+
+        path = self.find_worker_path(goal)
+        if path is None:
+            self.notify("그곳까지 이동할 수 없어요. 길이 막혀 있는지 확인해 주세요.", 2)
+            return
+        if not path:
+            return
+
+        self.worker_path = path
+        self.worker_moved = True
+
+    def update_worker(self, dt: float) -> None:
+        """Advance the worker smoothly along the current tile path."""
+        if not self.worker_path:
+            self.worker_move_progress = 0.0
+            return
+
+        self.worker_move_progress += dt / 0.18
+        while self.worker_path and self.worker_move_progress >= 1.0:
+            self.worker_x, self.worker_y = self.worker_path.pop(0)
+            self.worker_move_progress -= 1.0
+            if self.worker_path:
+                nx, ny = self.worker_path[0]
+                self.worker_facing = (nx - self.worker_x, ny - self.worker_y)
+        if not self.worker_path:
+            self.worker_move_progress = 0.0
 
     def can_build_on(self, x: int, y: int) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
@@ -482,7 +535,7 @@ class CityGame:
         elif self.tutorial_step == 3 and self.tutorial_house_built:
             self.tutorial_step = 4
             self.tutorial_done = True
-            self.tool = "inspect"
+            self.tool = "move"
             self.notify("튜토리얼 완료! 이제 자유롭게 도시를 만들어 보세요.", 6)
 
     def expand_land(self) -> None:
@@ -503,7 +556,7 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 2,
+            "version": 3,
             "seed": self.seed,
             "trees": [list(p) for p in sorted(self.trees)],
             "rocks": [list(p) for p in sorted(self.rocks)],
@@ -690,11 +743,26 @@ class CityGame:
         pygame.draw.rect(self.canvas, (85, 54, 38),
                          (round(cx + 1*z), round(base_y + 1*z), max(3, round(4*z)), max(8, round(7*z))))
 
+    def worker_screen_position(self) -> Tuple[float, float]:
+        """Return the worker's interpolated world position during a step."""
+        wx, wy = float(self.worker_x), float(self.worker_y)
+        if self.worker_path:
+            nx, ny = self.worker_path[0]
+            t = clamp(self.worker_move_progress, 0.0, 1.0)
+            wx += (nx - wx) * t
+            wy += (ny - wy) * t
+        tw, th = TILE_W * self.zoom, TILE_H * self.zoom
+        return ((wx - wy) * tw / 2 + self.camera_x,
+                (wx + wy) * th / 2 + self.camera_y)
+
     def draw_worker(self) -> None:
-        """Draw a small crisp pixel worker on the current map tile."""
-        cx, cy = self.tile_to_screen(self.worker_x, self.worker_y)
+        """Draw a pixel worker with a two-frame walking motion."""
+        cx, cy = self.worker_screen_position()
         z = self.zoom
-        bob = math.sin(time.time() * 13) * (1.1 * z if self.worker_anim > 0 else 0.25 * z)
+        moving = bool(self.worker_path)
+        phase = time.time() * 18.0
+        stride = math.sin(phase) * 2.0 * z if moving else 0.0
+        bob = abs(math.sin(phase)) * 1.25 * z if moving else 0.0
         foot_y = round(cy + 1 * z + bob)
 
         # Ground shadow.
@@ -702,18 +770,17 @@ class CityGame:
             self.canvas, (44, 57, 48),
             (round(cx - 5*z), round(cy - 1*z), max(3, round(10*z)), max(2, round(4*z)))
         )
-        # Boots and legs.
+        # Alternating legs and swinging arms create the walking animation.
         pygame.draw.rect(self.canvas, (54, 49, 48),
-                         (round(cx - 3*z), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
+                         (round(cx - 3*z - stride), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
         pygame.draw.rect(self.canvas, (54, 49, 48),
-                         (round(cx + 1*z), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
-        # Work jacket and arms.
+                         (round(cx + 1*z + stride), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
         pygame.draw.rect(self.canvas, (44, 91, 125),
                          (round(cx - 4*z), round(cy - 12*z + bob), max(5, round(8*z)), max(6, round(8*z))))
         pygame.draw.rect(self.canvas, (213, 157, 111),
-                         (round(cx - 6*z), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
+                         (round(cx - 6*z - stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
         pygame.draw.rect(self.canvas, (213, 157, 111),
-                         (round(cx + 3*z), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
+                         (round(cx + 3*z + stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
         # Face and yellow safety helmet.
         pygame.draw.rect(self.canvas, (229, 185, 143),
                          (round(cx - 3*z), round(cy - 18*z + bob), max(4, round(6*z)), max(5, round(6*z))))
@@ -824,7 +891,7 @@ class CityGame:
         pygame.draw.rect(self.canvas, C["gold"], box, 1)
         self.text(self.canvas, "첫 번째 도시 만들기", 15, 46, 11, C["gold"])
         tasks = [
-            ("1. 맵을 움직이고 확대해 보기", "카메라를 한 번 움직여 보세요."),
+            ("1. 캐릭터 이동하기", "[이동] 모드에서 빈 땅을 클릭해 보세요."),
             (f"2. 나무 제거하기 ({min(self.tutorial_removed,2)}/2)", "[제거] 도구로 나무 2개를 치우세요."),
             (f"3. 도로 배치하기 ({min(self.tutorial_roads,3)}/3)", "[도로] 도구로 도로 3칸을 놓으세요."),
             ("4. 첫 번째 집 건설하기", "도로 옆에 [집]을 지으세요."),
@@ -850,18 +917,16 @@ class CityGame:
         # Bottom tool bar.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, BOTTOM_Y), (LOGICAL_W, BOTTOM_Y), 1)
-        xs = [8, 88, 168, 248, 328]
+        xs = [8, 94, 180, 266]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
-            self.button(pygame.Rect(xs[i], 294, 74, 23), name, self.tool == key)
+            self.button(pygame.Rect(xs[i], 294, 80, 23), name, self.tool == key)
         # Expansion is a separate utility button and does not replace the tool mode.
         cost_text = "최대" if self.expand_level >= 3 else f"₩{[5000,15000,35000][self.expand_level]:,}"
         self.button(pygame.Rect(408, 294, 86, 23), "땅 확장", small=True)
         self.text(self.canvas, cost_text, 451, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"석재 {self.stone}", 550, 326, 9, C["muted"], center=True)
-        control_hint = ("작업자 조작: WASD 이동 · E 채집 · P 해제"
-                        if self.worker_control else "P: 작업자 직접 조작")
         hint = TOOL_HINTS.get(self.tool, "")
-        self.text(self.canvas, (hint + "   " + control_hint).strip(), 10, 327, 9, C["text"])
+        self.text(self.canvas, hint, 10, 327, 9, C["text"])
 
         if time.time() < self.notice_until:
             msg = self.notice
@@ -909,9 +974,9 @@ class CityGame:
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
-                tool_xs = [8, 88, 168, 248, 328]
+                tool_xs = [8, 94, 180, 266]
                 for i, tx in enumerate(tool_xs):
-                    if tx <= x <= tx + 74:
+                    if tx <= x <= tx + 80:
                         self.tool = TOOL_KEYS[i]
                         return
             if 408 <= x <= 494 and 294 <= y <= 317:
@@ -921,7 +986,10 @@ class CityGame:
         if VIEW_RECT.collidepoint(x, y):
             tile = self.screen_to_tile(x, y)
             if tile:
-                self.act_on_tile(*tile)
+                if self.tool == "move":
+                    self.set_worker_destination(*tile)
+                else:
+                    self.act_on_tile(*tile)
 
     def change_zoom(self, direction: int, mouse_logical: Tuple[int, int]) -> None:
         old_zoom = self.zoom
@@ -939,8 +1007,7 @@ class CityGame:
         new_tw, new_th = TILE_W * self.zoom, TILE_H * self.zoom
         self.camera_x = mx - (tx-ty) * new_tw / 2
         self.camera_y = my - (tx+ty) * new_th / 2
-        self.camera_used = True
-
+    
     def process_events(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -966,52 +1033,16 @@ class CityGame:
                     elif event.unicode and event.unicode.isprintable() and len(self.seed_text) < 14:
                         self.seed_text += event.unicode
                 else:
-                    if event.key in (pygame.K_ESCAPE,):
+                    if event.key == pygame.K_ESCAPE:
                         self.running = False
-                    elif event.key == pygame.K_p:
-                        self.worker_control = not self.worker_control
-                        if self.worker_control:
-                            self.notify("작업자 조작 ON · WASD 이동 / E 채집 / P 해제", 3)
-                        else:
-                            self.notify("카메라 조작 모드로 돌아왔어요.", 2)
-                    elif self.worker_control and event.key in (pygame.K_w, pygame.K_a, pygame.K_s, pygame.K_d):
-                        directions = {
-                            pygame.K_w: (0, -1), pygame.K_s: (0, 1),
-                            pygame.K_a: (-1, 0), pygame.K_d: (1, 0),
-                        }
-                        self.move_worker(*directions[event.key])
-                    elif self.worker_control and event.key == pygame.K_e:
-                        self.worker_interact()
-                    elif event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN):
-                        if event.key == pygame.K_LEFT:
-                            self.camera_x += 22
-                        elif event.key == pygame.K_RIGHT:
-                            self.camera_x -= 22
-                        elif event.key == pygame.K_UP:
-                            self.camera_y += 18
-                        elif event.key == pygame.K_DOWN:
-                            self.camera_y -= 18
-                        self.camera_used = True
-                    elif not self.worker_control and event.key in (pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s):
-                        if event.key == pygame.K_a:
-                            self.camera_x += 22
-                        elif event.key == pygame.K_d:
-                            self.camera_x -= 22
-                        elif event.key == pygame.K_w:
-                            self.camera_y += 18
-                        elif event.key == pygame.K_s:
-                            self.camera_y -= 18
-                        self.camera_used = True
                     elif event.key == pygame.K_1:
-                        self.tool = "inspect"
+                        self.tool = "move"
                     elif event.key == pygame.K_2:
                         self.tool = "clear"
                     elif event.key == pygame.K_3:
                         self.tool = "road"
                     elif event.key == pygame.K_4:
                         self.tool = "house"
-                    elif event.key == pygame.K_5:
-                        self.tool = "expand"
                     elif event.key == pygame.K_F5:
                         self.save_game()
                     elif event.key == pygame.K_F9:
@@ -1041,14 +1072,13 @@ class CityGame:
                 self.camera_x += dx
                 self.camera_y += dy
                 self.last_mouse = logical
-                self.camera_used = True
             elif event.type == pygame.MOUSEWHEEL:
                 logical = self.logical_mouse(pygame.mouse.get_pos())
                 if VIEW_RECT.collidepoint(*logical):
                     self.change_zoom(1 if event.y > 0 else -1, logical)
 
     def update(self, dt: float) -> None:
-        self.worker_anim = max(0.0, self.worker_anim - dt)
+        self.update_worker(dt)
         # Accelerated clock: six in-game minutes pass per real second.
         now = time.time()
         elapsed = now - self.last_clock_tick
@@ -1057,8 +1087,8 @@ class CityGame:
         while self.game_minutes >= 24 * 60:
             self.game_minutes -= 24 * 60
             self.day += 1
-        # Tutorial stage 1 is completed by camera movement or zoom.
-        if not self.tutorial_done and self.tutorial_step == 0 and self.camera_used:
+        # The first tutorial task is completed by giving the character a destination.
+        if not self.tutorial_done and self.tutorial_step == 0 and self.worker_moved:
             self.tutorial_step = 1
             self.tool = "clear"
             self.notify("좋아요! 이제 나무 2개를 제거해 건설 공간을 만드세요.", 4)
