@@ -35,6 +35,8 @@ MAP_H = 44
 TILE_W = 32
 TILE_H = 16
 ZOOM_LEVELS = [0.70, 0.82, 0.94, 1.06, 1.18, 1.30]
+WORKER_SIZE = 0.76
+ACTION_RANGE = 3
 
 # Palette: restrained 16-bit-inspired colors.
 C = {
@@ -73,9 +75,9 @@ TOOL_NAMES = ["이동", "제거", "도로", "집"]
 TOOL_KEYS = ["move", "clear", "road", "house"]
 TOOL_HINTS = {
     "move": "이동 모드: 목적지를 클릭하면 캐릭터가 길을 따라 걸어갑니다.",
-    "clear": "제거 모드: 나무나 바위를 클릭해 자원을 얻으세요.",
-    "road": "도로 모드: 빈 잔디 타일을 클릭해 도로를 건설하세요.",
-    "house": "집 모드: 도로 옆 빈 땅을 클릭해 집을 건설하세요.",
+    "clear": "제거 모드: 캐릭터 주변 3타일 안의 나무·바위를 제거하세요.",
+    "road": "도로 모드: 캐릭터 주변 3타일 안에 도로를 건설하세요.",
+    "house": "집 모드: 캐릭터 주변 3타일 안의 도로 옆에 집을 건설하세요.",
 }
 
 
@@ -460,6 +462,21 @@ class CityGame:
             return False
         return True
 
+    def worker_grid_position(self) -> Tuple[float, float]:
+        """Current continuous grid coordinates, including an in-progress step."""
+        wx, wy = float(self.worker_x), float(self.worker_y)
+        if self.worker_path:
+            nx, ny = self.worker_path[0]
+            t = clamp(self.worker_move_progress, 0.0, 1.0)
+            wx += (nx - wx) * t
+            wy += (ny - wy) * t
+        return wx, wy
+
+    def worker_can_reach(self, x: int, y: int) -> bool:
+        """Actions are limited to a small Manhattan radius around the character."""
+        wx, wy = self.worker_grid_position()
+        return abs(x - wx) + abs(y - wy) <= ACTION_RANGE
+
     def has_adjacent_road(self, x: int, y: int) -> bool:
         return any((x + dx, y + dy) in self.roads
                    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)])
@@ -467,6 +484,9 @@ class CityGame:
     def act_on_tile(self, x: int, y: int) -> None:
         if not self.is_unlocked(x, y):
             self.notify("아직 개척하지 않은 땅이에요. [확장]을 이용하세요.")
+            return
+        if self.tool in ("clear", "road", "house") and not self.worker_can_reach(x, y):
+            self.notify(f"캐릭터 주변 {ACTION_RANGE}타일 안에서만 작업할 수 있어요. 이동 모드로 가까이 이동하세요.", 2.5)
             return
         if self.tool == "clear":
             if (x, y) in self.trees:
@@ -735,12 +755,7 @@ class CityGame:
 
     def worker_screen_position(self) -> Tuple[float, float]:
         """Return the worker's interpolated world position during a step."""
-        wx, wy = float(self.worker_x), float(self.worker_y)
-        if self.worker_path:
-            nx, ny = self.worker_path[0]
-            t = clamp(self.worker_move_progress, 0.0, 1.0)
-            wx += (nx - wx) * t
-            wy += (ny - wy) * t
+        wx, wy = self.worker_grid_position()
         tw, th = TILE_W * self.zoom, TILE_H * self.zoom
         return ((wx - wy) * tw / 2 + self.camera_x,
                 (wx + wy) * th / 2 + self.camera_y)
@@ -748,7 +763,7 @@ class CityGame:
     def draw_worker(self) -> None:
         """Draw a pixel worker with a two-frame walking motion."""
         cx, cy = self.worker_screen_position()
-        z = self.zoom
+        z = self.zoom * WORKER_SIZE
         moving = bool(self.worker_path)
         phase = time.time() * 18.0
         stride = math.sin(phase) * 2.0 * z if moving else 0.0
@@ -837,17 +852,41 @@ class CityGame:
                         (bottom[0], bottom[1] + wall_depth), 1
                     )
 
-                # Keep each building/object attached to its tile's depth order.
-                if (x, y) in self.roads:
+        # Render flat road surfaces after the terrain, then sort tall objects and
+        # the moving character by their current isometric depth. This prevents a
+        # foreground ground tile from being drawn over the character mid-step.
+        for x, y in self.roads:
+            if self.is_unlocked(x, y):
+                cx, cy = self.tile_to_screen(x, y)
+                if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
                     self.draw_road(x, y)
+
+        depth_items: List[Tuple[float, float, int, int, int, str]] = []
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                if not self.is_unlocked(x, y):
+                    continue
                 if (x, y) in self.trees:
-                    self.draw_tree(x, y)
+                    depth_items.append((x + y, x, 0, x, y, "tree"))
                 if (x, y) in self.rocks:
-                    self.draw_rock(x, y)
+                    depth_items.append((x + y, x, 1, x, y, "rock"))
                 if (x, y) in self.houses:
-                    self.draw_house(x, y)
-                if (x, y) == (self.worker_x, self.worker_y):
-                    self.draw_worker()
+                    depth_items.append((x + y, x, 2, x, y, "house"))
+
+        worker_gx, worker_gy = self.worker_grid_position()
+        depth_items.append((worker_gx + worker_gy, worker_gx, 3,
+                            self.worker_x, self.worker_y, "worker"))
+        depth_items.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        for _depth, _x_order, _kind_order, x, y, kind in depth_items:
+            if kind == "tree":
+                self.draw_tree(x, y)
+            elif kind == "rock":
+                self.draw_rock(x, y)
+            elif kind == "house":
+                self.draw_house(x, y)
+            elif kind == "worker":
+                self.draw_worker()
 
         # Tile cursor / placement preview.
         mouse = pygame.mouse.get_pos()
@@ -858,12 +897,13 @@ class CityGame:
                 x, y = tile
                 cx, cy = self.tile_to_screen(x, y)
                 pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
+                in_range = self.worker_can_reach(x, y)
                 if self.tool == "house":
-                    allowed = self.can_build_on(x, y) and self.has_adjacent_road(x, y)
+                    allowed = in_range and self.can_build_on(x, y) and self.has_adjacent_road(x, y)
                 elif self.tool == "road":
-                    allowed = self.can_build_on(x, y)
+                    allowed = in_range and self.can_build_on(x, y)
                 elif self.tool == "clear":
-                    allowed = (x, y) in self.trees or (x, y) in self.rocks
+                    allowed = in_range and ((x, y) in self.trees or (x, y) in self.rocks)
                 else:
                     allowed = self.worker_can_stand(x, y)
                 color = C["green"] if allowed else C["red"]
