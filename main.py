@@ -811,12 +811,16 @@ class CityGame:
                          (round(cx + 1*z + stride), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
         pygame.draw.rect(self.canvas, (44, 91, 125),
                          (round(cx - 4*z), round(cy - 12*z + bob), max(5, round(8*z)), max(6, round(8*z))))
+        # Left arm remains visible. The right arm is either resting or animated,
+        # never both at once, so work actions do not create a third arm.
         pygame.draw.rect(self.canvas, (213, 157, 111),
                          (round(cx - 6*z - stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
-        pygame.draw.rect(self.canvas, (213, 157, 111),
-                         (round(cx + 3*z + stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
-        # The working arm swings forward while chopping, mining or building.
-        if self.worker_action_timer > 0:
+        working = self.worker_action_timer > 0
+        if not working:
+            pygame.draw.rect(self.canvas, (213, 157, 111),
+                             (round(cx + 3*z + stride*0.35), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
+        # During work, this animated arm replaces the resting right arm.
+        if working:
             progress = 1.0 - self.worker_action_timer / 0.58
             swing = math.sin(progress * math.pi)
             shoulder = (round(cx + 2*z), round(cy - 10*z + bob))
