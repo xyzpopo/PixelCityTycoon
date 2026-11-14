@@ -37,6 +37,7 @@ TILE_H = 16
 ZOOM_LEVELS = [0.70, 0.82, 0.94, 1.06, 1.18, 1.30]
 WORKER_SIZE = 0.76
 ACTION_RANGE = 3
+MAX_REMOVAL_QUEUE = 50
 
 # Palette: restrained 16-bit-inspired colors.
 C = {
@@ -76,7 +77,7 @@ TOOL_NAMES = ["F1 이동", "F2 제거", "F3 도로", "F4 집"]
 TOOL_KEYS = ["move", "clear", "road", "house"]
 TOOL_HINTS = {
     "move": "이동 모드: 목적지를 클릭하면 캐릭터가 길을 따라 걸어갑니다.",
-    "clear": "제거 모드: 캐릭터 주변 3타일 안의 나무·바위를 제거하세요.",
+    "clear": "제거 모드: 나무·바위를 클릭해 예약하세요. 다시 클릭하면 취소됩니다.",
     "road": "도로 모드: 캐릭터 주변 3타일 안에 도로를 건설하세요.",
     "house": "집 모드: 캐릭터 주변 3타일 안의 도로 옆에 집을 건설하세요.",
 }
@@ -137,6 +138,8 @@ class CityGame:
         self.worker_moved = False
         self.worker_action = "idle"
         self.worker_action_timer = 0.0
+        self.removal_queue: List[Tuple[int, int]] = []
+        self.removal_path_active = False
         self.dragging = False
         self.last_mouse = (0, 0)
         self.modal_seed = False
@@ -244,6 +247,8 @@ class CityGame:
         self.worker_moved = False
         self.worker_action = "idle"
         self.worker_action_timer = 0.0
+        self.removal_queue = []
+        self.removal_path_active = False
         self.tutorial_step = 0
         self.tutorial_done = False
         self.tutorial_removed = 0
@@ -448,6 +453,7 @@ class CityGame:
                 self.worker_x, self.worker_y = self.worker_path[0]
             self.worker_path.clear()
             self.worker_move_progress = 0.0
+        self.removal_path_active = False
 
         path = self.find_worker_path(goal)
         if path is None:
@@ -503,6 +509,146 @@ class CityGame:
         wx, wy = self.worker_grid_position()
         return abs(x - wx) + abs(y - wy) <= ACTION_RANGE
 
+    def toggle_removal_order(self, x: int, y: int) -> None:
+        """Add a tree/rock to the ordered removal queue, or cancel its order."""
+        target = (x, y)
+        if not self.is_unlocked(x, y):
+            self.notify("아직 개척하지 않은 땅이에요. [확장]을 이용하세요.")
+            return
+
+        if target in self.removal_queue:
+            was_active = self.removal_queue[0] == target and self.removal_path_active
+            self.removal_queue.remove(target)
+            if was_active:
+                if self.worker_path and self.worker_move_progress >= 0.5:
+                    self.worker_x, self.worker_y = self.worker_path[0]
+                self.worker_path.clear()
+                self.worker_move_progress = 0.0
+                self.removal_path_active = False
+            self.notify(f"제거 예약을 취소했어요. 남은 예약 {len(self.removal_queue)}개", 2.2)
+            return
+
+        if target not in self.trees and target not in self.rocks:
+            self.notify("예약하려면 나무나 바위를 클릭하세요.", 2)
+            return
+        if len(self.removal_queue) >= MAX_REMOVAL_QUEUE:
+            self.notify(f"제거 예약은 최대 {MAX_REMOVAL_QUEUE}개까지 가능해요.", 2.5)
+            return
+
+        self.removal_queue.append(target)
+        self.notify(f"제거 예약 {len(self.removal_queue)}개 · 클릭한 순서대로 작업합니다.", 2.5)
+
+    def find_worker_path_to_work_target(
+        self, target: Tuple[int, int]
+    ) -> Optional[List[Tuple[int, int]]]:
+        """Find the shortest path to any walkable tile within work range of a target."""
+        tx, ty = target
+        work_positions = {
+            (tx + dx, ty + dy)
+            for dx in range(-ACTION_RANGE, ACTION_RANGE + 1)
+            for dy in range(-ACTION_RANGE, ACTION_RANGE + 1)
+            if abs(dx) + abs(dy) <= ACTION_RANGE
+            and self.worker_can_stand(tx + dx, ty + dy)
+        }
+        if not work_positions:
+            return None
+
+        start = (self.worker_x, self.worker_y)
+        if start in work_positions:
+            return []
+
+        frontier = [start]
+        came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+        head = 0
+        goal: Optional[Tuple[int, int]] = None
+        while head < len(frontier):
+            current = frontier[head]
+            head += 1
+            if current in work_positions:
+                goal = current
+                break
+
+            x, y = current
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt = (x + dx, y + dy)
+                if nxt in came_from or not self.worker_can_stand(*nxt):
+                    continue
+                came_from[nxt] = current
+                frontier.append(nxt)
+
+        if goal is None:
+            return None
+
+        path: List[Tuple[int, int]] = []
+        current = goal
+        while current != start:
+            path.append(current)
+            previous = came_from[current]
+            if previous is None:
+                return None
+            current = previous
+        path.reverse()
+        return path
+
+    def remove_resource_at(self, x: int, y: int) -> bool:
+        """Remove a tree or rock and apply the usual rewards/tutorial progress."""
+        target = (x, y)
+        if target in self.trees:
+            self.trees.remove(target)
+            self.start_worker_action("chop", x, y)
+            self.wood += 2
+            self.tutorial_removed += 1
+            self.notify("나무를 제거했어요! 목재 +2")
+            self.check_tutorial()
+            return True
+        if target in self.rocks:
+            self.rocks.remove(target)
+            self.start_worker_action("mine", x, y)
+            self.stone += 2
+            self.notify("바위를 제거했어요! 석재 +2")
+            return True
+        return False
+
+    def update_removal_queue(self) -> None:
+        """Send the worker to queued trees/rocks one at a time."""
+        while self.removal_queue:
+            target = self.removal_queue[0]
+            if target in self.trees or target in self.rocks:
+                break
+            self.removal_queue.pop(0)
+            self.removal_path_active = False
+
+        if not self.removal_queue or self.worker_path or self.worker_action_timer > 0:
+            return
+
+        target = self.removal_queue[0]
+        if self.worker_can_reach(*target):
+            self.removal_queue.pop(0)
+            self.removal_path_active = False
+            self.remove_resource_at(*target)
+            return
+
+        path = self.find_worker_path_to_work_target(target)
+        if path is None:
+            self.removal_queue.pop(0)
+            self.removal_path_active = False
+            self.notify("해당 장애물에 접근할 수 없어 제거 예약을 건너뛰었어요.", 2.8)
+            return
+        if not path:
+            # An empty path should already be in work range; guard against stale
+            # queue state so the update loop cannot become stuck.
+            self.removal_queue.pop(0)
+            self.removal_path_active = False
+            self.remove_resource_at(*target)
+            return
+
+        self.worker_path = path
+        self.worker_move_progress = 0.0
+        self.worker_moved = True
+        self.removal_path_active = True
+        nx, ny = path[0]
+        self.worker_facing = (nx - self.worker_x, ny - self.worker_y)
+
     def has_adjacent_road(self, x: int, y: int) -> bool:
         return any((x + dx, y + dy) in self.roads
                    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)])
@@ -515,19 +661,7 @@ class CityGame:
             self.notify(f"캐릭터 주변 {ACTION_RANGE}타일 안에서만 작업할 수 있어요. 이동 모드로 가까이 이동하세요.", 2.5)
             return
         if self.tool == "clear":
-            if (x, y) in self.trees:
-                self.trees.remove((x, y))
-                self.start_worker_action("chop", x, y)
-                self.wood += 2
-                self.tutorial_removed += 1
-                self.notify("나무를 제거했어요! 목재 +2")
-                self.check_tutorial()
-            elif (x, y) in self.rocks:
-                self.rocks.remove((x, y))
-                self.start_worker_action("mine", x, y)
-                self.stone += 2
-                self.notify("바위를 제거했어요! 석재 +2")
-            else:
+            if not self.remove_resource_at(x, y):
                 self.notify("이 타일에는 제거할 장애물이 없어요.")
         elif self.tool == "road":
             if not self.can_build_on(x, y):
@@ -596,7 +730,7 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 3,
+            "version": 4,
             "seed": self.seed,
             "trees": [list(p) for p in sorted(self.trees)],
             "rocks": [list(p) for p in sorted(self.rocks)],
@@ -611,6 +745,7 @@ class CityGame:
             "game_minutes": self.game_minutes,
             "worker": [self.worker_x, self.worker_y],
             "worker_facing": list(self.worker_facing),
+            "removal_queue": [list(p) for p in self.removal_queue],
             "tutorial_step": self.tutorial_step,
             "tutorial_done": self.tutorial_done,
             "tutorial_removed": self.tutorial_removed,
@@ -648,6 +783,23 @@ class CityGame:
             if (isinstance(facing, list) and len(facing) == 2
                     and tuple(facing) in ((1, 0), (-1, 0), (0, 1), (0, -1))):
                 self.worker_facing = tuple(facing)
+
+            # Older version-3 saves simply have no removal_queue field.
+            self.removal_queue = []
+            self.removal_path_active = False
+            saved_queue = data.get("removal_queue", [])
+            if isinstance(saved_queue, list):
+                for pos in saved_queue[:MAX_REMOVAL_QUEUE]:
+                    if not (isinstance(pos, list) and len(pos) == 2
+                            and all(type(value) is int for value in pos)):
+                        continue
+                    target = (pos[0], pos[1])
+                    if (0 <= target[0] < MAP_W and 0 <= target[1] < MAP_H
+                            and self.is_unlocked(*target)
+                            and (target in self.trees or target in self.rocks)
+                            and target not in self.removal_queue):
+                        self.removal_queue.append(target)
+
             self.tutorial_step = int(data.get("tutorial_step", 0))
             self.tutorial_done = bool(data.get("tutorial_done", False))
             self.tutorial_removed = int(data.get("tutorial_removed", 0))
@@ -1034,6 +1186,8 @@ class CityGame:
             elif kind == "worker":
                 self.draw_worker()
 
+        self.draw_removal_queue()
+
         # Tile cursor / placement preview.
         mouse = pygame.mouse.get_pos()
         mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
@@ -1049,15 +1203,41 @@ class CityGame:
                 elif self.tool == "road":
                     allowed = in_range and self.can_build_on(x, y)
                 elif self.tool == "clear":
-                    allowed = in_range and ((x, y) in self.trees or (x, y) in self.rocks)
+                    allowed = (x, y) in self.trees or (x, y) in self.rocks
                 else:
                     allowed = self.worker_can_stand(x, y)
-                color = C["green"] if allowed else C["red"]
+                if self.tool == "clear" and (x, y) in self.removal_queue:
+                    color = C["gold"]
+                else:
+                    color = C["green"] if allowed else C["red"]
                 pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
 
         # Tutorial card.
         self.draw_tutorial_card()
         self.canvas.set_clip(None)
+
+    def draw_removal_queue(self) -> None:
+        """Mark reserved trees and rocks with a gold tile outline and order number."""
+        for index, (x, y) in enumerate(self.removal_queue, start=1):
+            if not self.is_unlocked(x, y):
+                continue
+            cx, cy = self.tile_to_screen(x, y)
+            marker = self.diamond(
+                cx, cy,
+                TILE_W * self.zoom * 0.94,
+                TILE_H * self.zoom * 0.94
+            )
+            pygame.draw.polygon(
+                self.canvas, C["gold"], marker,
+                max(1, round(1.5 * self.zoom))
+            )
+            badge_x = round(cx + TILE_W * self.zoom * 0.20)
+            badge_y = round(cy - TILE_H * self.zoom * 0.08)
+            radius = max(4, round(5 * self.zoom))
+            pygame.draw.circle(self.canvas, (35, 43, 49), (badge_x, badge_y), radius + 1)
+            pygame.draw.circle(self.canvas, C["gold"], (badge_x, badge_y), radius)
+            label = str(index) if index < 10 else "+"
+            self.text(self.canvas, label, badge_x, badge_y, 7, (35, 43, 49), center=True)
 
     def draw_worker_path_preview(self) -> None:
         """Show the walkable route to the tile currently under the mouse."""
@@ -1149,6 +1329,7 @@ class CityGame:
         self.button(pygame.Rect(408, 294, 86, 23), "땅 확장", small=True)
         self.text(self.canvas, cost_text, 451, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"석재 {self.stone}", 550, 326, 9, C["muted"], center=True)
+        self.text(self.canvas, f"예약 {len(self.removal_queue)}", 610, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
         self.text(self.canvas, hint, 10, 327, 9, C["text"])
 
@@ -1212,6 +1393,8 @@ class CityGame:
             if tile:
                 if self.tool == "move":
                     self.set_worker_destination(*tile)
+                elif self.tool == "clear":
+                    self.toggle_removal_order(*tile)
                 else:
                     self.act_on_tile(*tile)
 
@@ -1315,6 +1498,7 @@ class CityGame:
             self.worker_action_timer = max(0.0, self.worker_action_timer - dt)
             if self.worker_action_timer == 0.0:
                 self.worker_action = "idle"
+        self.update_removal_queue()
         # Accelerated clock: six in-game minutes pass per real second.
         now = time.time()
         elapsed = now - self.last_clock_tick
