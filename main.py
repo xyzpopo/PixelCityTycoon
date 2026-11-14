@@ -513,8 +513,8 @@ class CityGame:
 
     def set_worker_destination(self, x: int, y: int) -> None:
         """Set a click-to-move destination. This is only called in move mode."""
-        if self.worker_pending_action is not None:
-            self.notify("작업 타격이 끝난 뒤 이동할 수 있어요.", 2)
+        if self.worker_pending_action is not None or self.worker_action_timer > 0:
+            self.notify("작업 동작이 끝난 뒤 이동할 수 있어요.", 2)
             return
         goal = (x, y)
         if goal == (self.worker_x, self.worker_y) and not self.worker_path:
