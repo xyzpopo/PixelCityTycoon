@@ -127,6 +127,11 @@ class CityGame:
         self.camera_x = 0.0
         self.camera_y = 0.0
         self.tool = "inspect"
+        self.worker_x = MAP_W // 2
+        self.worker_y = MAP_H // 2
+        self.worker_facing = (1, 0)
+        self.worker_control = False
+        self.worker_anim = 0.0
         self.dragging = False
         self.last_mouse = (0, 0)
         self.camera_used = False
@@ -206,6 +211,10 @@ class CityGame:
         self.day = 1
         self.game_minutes = 8 * 60
         self.tool = "inspect"
+        self.worker_x = MAP_W // 2
+        self.worker_y = MAP_H // 2
+        self.worker_facing = (1, 0)
+        self.worker_anim = 0.0
         self.tutorial_step = 0
         self.tutorial_done = False
         self.tutorial_removed = 0
@@ -346,6 +355,42 @@ class CityGame:
     # ------------------------------------------------------------------
     # Building / economy
     # ------------------------------------------------------------------
+    def worker_can_stand(self, x: int, y: int) -> bool:
+        """Return whether the worker can occupy a tile."""
+        if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
+            return False
+        if self.terrain[x][y].terrain != "grass":
+            return False
+        if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.houses:
+            return False
+        return True
+
+    def move_worker(self, dx: int, dy: int) -> None:
+        """Move one tile in isometric grid coordinates."""
+        self.worker_facing = (dx, dy)
+        nx, ny = self.worker_x + dx, self.worker_y + dy
+        if not self.worker_can_stand(nx, ny):
+            return
+        self.worker_x, self.worker_y = nx, ny
+        self.worker_anim = 0.22
+
+    def worker_interact(self) -> None:
+        """Collect a tree or rock directly in front of the worker."""
+        dx, dy = self.worker_facing
+        target = (self.worker_x + dx, self.worker_y + dy)
+        if target in self.trees:
+            self.trees.remove(target)
+            self.wood += 2
+            self.tutorial_removed += 1
+            self.notify("작업자가 나무를 베었어요! 목재 +2")
+            self.check_tutorial()
+        elif target in self.rocks:
+            self.rocks.remove(target)
+            self.stone += 2
+            self.notify("작업자가 바위를 채취했어요! 석재 +2")
+        else:
+            self.notify("바로 앞에 채집할 나무나 바위가 없어요.", 1.5)
+
     def can_build_on(self, x: int, y: int) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
@@ -354,6 +399,8 @@ class CityGame:
         if (x, y) in self.trees or (x, y) in self.rocks:
             return False
         if (x, y) in self.roads or (x, y) in self.houses:
+            return False
+        if (x, y) == (self.worker_x, self.worker_y):
             return False
         return True
 
@@ -455,7 +502,7 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 1,
+            "version": 2,
             "seed": self.seed,
             "trees": [list(p) for p in sorted(self.trees)],
             "rocks": [list(p) for p in sorted(self.rocks)],
@@ -468,6 +515,8 @@ class CityGame:
             "stone": self.stone,
             "day": self.day,
             "game_minutes": self.game_minutes,
+            "worker": [self.worker_x, self.worker_y],
+            "worker_facing": list(self.worker_facing),
             "tutorial_step": self.tutorial_step,
             "tutorial_done": self.tutorial_done,
             "tutorial_removed": self.tutorial_removed,
@@ -496,6 +545,15 @@ class CityGame:
             self.stone = int(data.get("stone", 0))
             self.day = int(data.get("day", 1))
             self.game_minutes = int(data.get("game_minutes", 480))
+            worker_pos = data.get("worker", [MAP_W // 2, MAP_H // 2])
+            if (isinstance(worker_pos, list) and len(worker_pos) == 2
+                    and all(isinstance(v, int) for v in worker_pos)
+                    and self.worker_can_stand(worker_pos[0], worker_pos[1])):
+                self.worker_x, self.worker_y = worker_pos
+            facing = data.get("worker_facing", [1, 0])
+            if (isinstance(facing, list) and len(facing) == 2
+                    and tuple(facing) in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                self.worker_facing = tuple(facing)
             self.tutorial_step = int(data.get("tutorial_step", 0))
             self.tutorial_done = bool(data.get("tutorial_done", False))
             self.tutorial_removed = int(data.get("tutorial_removed", 0))
@@ -631,6 +689,38 @@ class CityGame:
         pygame.draw.rect(self.canvas, (85, 54, 38),
                          (round(cx + 1*z), round(base_y + 1*z), max(3, round(4*z)), max(8, round(7*z))))
 
+    def draw_worker(self) -> None:
+        """Draw a small crisp pixel worker on the current map tile."""
+        cx, cy = self.tile_to_screen(self.worker_x, self.worker_y)
+        z = self.zoom
+        bob = math.sin(time.time() * 13) * (1.1 * z if self.worker_anim > 0 else 0.25 * z)
+        foot_y = round(cy + 1 * z + bob)
+
+        # Ground shadow.
+        pygame.draw.ellipse(
+            self.canvas, (44, 57, 48),
+            (round(cx - 5*z), round(cy - 1*z), max(3, round(10*z)), max(2, round(4*z)))
+        )
+        # Boots and legs.
+        pygame.draw.rect(self.canvas, (54, 49, 48),
+                         (round(cx - 3*z), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
+        pygame.draw.rect(self.canvas, (54, 49, 48),
+                         (round(cx + 1*z), foot_y - round(4*z), max(2, round(3*z)), max(3, round(4*z))))
+        # Work jacket and arms.
+        pygame.draw.rect(self.canvas, (44, 91, 125),
+                         (round(cx - 4*z), round(cy - 12*z + bob), max(5, round(8*z)), max(6, round(8*z))))
+        pygame.draw.rect(self.canvas, (213, 157, 111),
+                         (round(cx - 6*z), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
+        pygame.draw.rect(self.canvas, (213, 157, 111),
+                         (round(cx + 3*z), round(cy - 11*z + bob), max(2, round(3*z)), max(5, round(5*z))))
+        # Face and yellow safety helmet.
+        pygame.draw.rect(self.canvas, (229, 185, 143),
+                         (round(cx - 3*z), round(cy - 18*z + bob), max(4, round(6*z)), max(5, round(6*z))))
+        pygame.draw.rect(self.canvas, (228, 174, 55),
+                         (round(cx - 4*z), round(cy - 20*z + bob), max(6, round(8*z)), max(2, round(3*z))))
+        pygame.draw.rect(self.canvas, (245, 205, 95),
+                         (round(cx - 1*z), round(cy - 20*z + bob), max(2, round(2*z)), max(1, round(2*z))))
+
     def draw_world(self) -> None:
         self.canvas.fill(C["sky"])
         self.canvas.set_clip(VIEW_RECT)
@@ -698,6 +788,8 @@ class CityGame:
                     self.draw_rock(x, y)
                 if (x, y) in self.houses:
                     self.draw_house(x, y)
+                if (x, y) == (self.worker_x, self.worker_y):
+                    self.draw_worker()
 
         # Tile cursor / placement preview.
         mouse = pygame.mouse.get_pos()
@@ -765,7 +857,10 @@ class CityGame:
         self.button(pygame.Rect(408, 294, 86, 23), "땅 확장", small=True)
         self.text(self.canvas, cost_text, 451, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"석재 {self.stone}", 550, 326, 9, C["muted"], center=True)
-        self.text(self.canvas, TOOL_HINTS.get(self.tool, ""), 10, 327, 9, C["text"])
+        control_hint = ("작업자 조작: WASD 이동 · E 채집 · P 해제"
+                        if self.worker_control else "P: 작업자 직접 조작")
+        hint = TOOL_HINTS.get(self.tool, "")
+        self.text(self.canvas, (hint + "   " + control_hint).strip(), 10, 327, 9, C["text"])
 
         if time.time() < self.notice_until:
             msg = self.notice
@@ -872,17 +967,39 @@ class CityGame:
                 else:
                     if event.key in (pygame.K_ESCAPE,):
                         self.running = False
-                    elif event.key in (pygame.K_LEFT, pygame.K_a):
-                        self.camera_x += 22
+                    elif event.key == pygame.K_p:
+                        self.worker_control = not self.worker_control
+                        if self.worker_control:
+                            self.notify("작업자 조작 ON · WASD 이동 / E 채집 / P 해제", 3)
+                        else:
+                            self.notify("카메라 조작 모드로 돌아왔어요.", 2)
+                    elif self.worker_control and event.key in (pygame.K_w, pygame.K_a, pygame.K_s, pygame.K_d):
+                        directions = {
+                            pygame.K_w: (0, -1), pygame.K_s: (0, 1),
+                            pygame.K_a: (-1, 0), pygame.K_d: (1, 0),
+                        }
+                        self.move_worker(*directions[event.key])
+                    elif self.worker_control and event.key == pygame.K_e:
+                        self.worker_interact()
+                    elif event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN):
+                        if event.key == pygame.K_LEFT:
+                            self.camera_x += 22
+                        elif event.key == pygame.K_RIGHT:
+                            self.camera_x -= 22
+                        elif event.key == pygame.K_UP:
+                            self.camera_y += 18
+                        elif event.key == pygame.K_DOWN:
+                            self.camera_y -= 18
                         self.camera_used = True
-                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                        self.camera_x -= 22
-                        self.camera_used = True
-                    elif event.key in (pygame.K_UP, pygame.K_w):
-                        self.camera_y += 18
-                        self.camera_used = True
-                    elif event.key in (pygame.K_DOWN, pygame.K_s):
-                        self.camera_y -= 18
+                    elif not self.worker_control and event.key in (pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s):
+                        if event.key == pygame.K_a:
+                            self.camera_x += 22
+                        elif event.key == pygame.K_d:
+                            self.camera_x -= 22
+                        elif event.key == pygame.K_w:
+                            self.camera_y += 18
+                        elif event.key == pygame.K_s:
+                            self.camera_y -= 18
                         self.camera_used = True
                     elif event.key == pygame.K_1:
                         self.tool = "inspect"
@@ -930,6 +1047,7 @@ class CityGame:
                     self.change_zoom(1 if event.y > 0 else -1, logical)
 
     def update(self, dt: float) -> None:
+        self.worker_anim = max(0.0, self.worker_anim - dt)
         # Accelerated clock: six in-game minutes pass per real second.
         now = time.time()
         elapsed = now - self.last_clock_tick
