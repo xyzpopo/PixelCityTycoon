@@ -634,29 +634,62 @@ class CityGame:
     def draw_world(self) -> None:
         self.canvas.fill(C["sky"])
         self.canvas.set_clip(VIEW_RECT)
-        # Fill far background with a darker green so map edges are visible.
-        pygame.draw.rect(self.canvas, (75, 121, 91), VIEW_RECT)
 
-        # Draw all tiles back-to-front. The depth sort keeps isometric overlaps natural.
-        # A single translucent overlay dims locked land after the world sprites are drawn.
-        locked_overlay = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
-        locked_overlay.set_clip(VIEW_RECT)
+        # Unclaimed land is a true void, not a dimmed continuation of the terrain.
+        # The dark background makes the edge of the owned island easy to read.
+        pygame.draw.rect(self.canvas, (28, 39, 55), VIEW_RECT)
+
+        wall_depth = max(4, round(8 * self.zoom))
+        wall_color_a = (91, 63, 48)
+        wall_color_b = (62, 47, 43)
+
+        # Draw only unlocked tiles, back-to-front. The exposed southern edges
+        # receive a small soil wall so the map reads as a raised land platform.
         for depth in range(MAP_W + MAP_H - 1):
             for x in range(MAP_W):
                 y = depth - x
-                if not (0 <= y < MAP_H):
+                if not (0 <= y < MAP_H) or not self.is_unlocked(x, y):
                     continue
+
                 cx, cy = self.tile_to_screen(x, y)
                 if cx < -80 or cx > LOGICAL_W + 80 or cy < TOP_H - 100 or cy > BOTTOM_Y + 50:
                     continue
+
                 self.draw_tile(x, y)
+                tw, th = TILE_W * self.zoom, TILE_H * self.zoom
+                right = (round(cx + tw / 2), round(cy))
+                bottom = (round(cx), round(cy + th / 2))
+                left = (round(cx - tw / 2), round(cy))
 
-                # Locked land is shown dimmed after the terrain and objects are rendered.
-                if not self.is_unlocked(x, y):
-                    locked_pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
-                    pygame.draw.polygon(locked_overlay, (25, 32, 39, 112), locked_pts)
+                # The edge shared with (x+1, y) is the right-bottom edge.
+                if not self.is_unlocked(x + 1, y):
+                    pygame.draw.polygon(
+                        self.canvas, wall_color_a,
+                        [right, bottom,
+                         (bottom[0], bottom[1] + wall_depth),
+                         (right[0], right[1] + wall_depth)]
+                    )
+                    pygame.draw.line(
+                        self.canvas, wall_color_b,
+                        (bottom[0], bottom[1] + wall_depth),
+                        (right[0], right[1] + wall_depth), 1
+                    )
 
-                # Object sprites are drawn in tile depth order.
+                # The edge shared with (x, y+1) is the left-bottom edge.
+                if not self.is_unlocked(x, y + 1):
+                    pygame.draw.polygon(
+                        self.canvas, wall_color_b,
+                        [left, bottom,
+                         (bottom[0], bottom[1] + wall_depth),
+                         (left[0], left[1] + wall_depth)]
+                    )
+                    pygame.draw.line(
+                        self.canvas, wall_color_a,
+                        (left[0], left[1] + wall_depth),
+                        (bottom[0], bottom[1] + wall_depth), 1
+                    )
+
+                # Keep each building/object attached to its tile's depth order.
                 if (x, y) in self.roads:
                     self.draw_road(x, y)
                 if (x, y) in self.trees:
@@ -665,8 +698,6 @@ class CityGame:
                     self.draw_rock(x, y)
                 if (x, y) in self.houses:
                     self.draw_house(x, y)
-
-        self.canvas.blit(locked_overlay, (0, 0))
 
         # Tile cursor / placement preview.
         mouse = pygame.mouse.get_pos()
