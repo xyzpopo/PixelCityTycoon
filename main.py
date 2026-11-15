@@ -1328,6 +1328,33 @@ class CityGame:
         pygame.draw.polygon(self.canvas, color, pts)
         pygame.draw.polygon(self.canvas, C["grass_edge"] if terrain != "water" else C["water_dark"], pts, 1)
 
+        # A thin sand lip follows only the land tiles that actually touch water.
+        if terrain == "grass":
+            top = (round(cx), round(cy - th / 2))
+            right = (round(cx + tw / 2), round(cy))
+            bottom = (round(cx), round(cy + th / 2))
+            left = (round(cx - tw / 2), round(cy))
+            shoreline_sides = (
+                ((x + 1, y), [right, bottom,
+                              (round(cx + tw * 0.16), round(cy + th * 0.34)),
+                              (round(cx + tw * 0.34), round(cy + th * 0.16))]),
+                ((x - 1, y), [top, left,
+                              (round(cx - tw * 0.34), round(cy - th * 0.16)),
+                              (round(cx - tw * 0.16), round(cy - th * 0.34))]),
+                ((x, y + 1), [left, bottom,
+                              (round(cx - tw * 0.34), round(cy + th * 0.16)),
+                              (round(cx - tw * 0.16), round(cy + th * 0.34))]),
+                ((x, y - 1), [top, right,
+                              (round(cx + tw * 0.34), round(cy - th * 0.16)),
+                              (round(cx + tw * 0.16), round(cy - th * 0.34))]),
+            )
+            for (nx, ny), shore_points in shoreline_sides:
+                if (0 <= nx < MAP_W and 0 <= ny < MAP_H
+                        and self.terrain[nx][ny].terrain == "water"):
+                    pygame.draw.polygon(self.canvas, (190, 177, 126), shore_points)
+                    pygame.draw.lines(self.canvas, (151, 155, 111), True,
+                                      shore_points[:2], max(1, round(self.zoom)))
+
         # Tiny low-contrast pixel flecks make open ground feel less flat.
         if terrain == "grass" and self.zoom >= 0.82:
             if (x * 7 + y * 11) % 19 == 0:
@@ -1536,38 +1563,70 @@ class CityGame:
         if len(inner) >= 3:
             pygame.draw.polygon(self.canvas, C["road"], inner)
 
-        # Mark actual connections only. Two perpendicular branches meet at the
-        # center as a sharp 90-degree turn; no rounded corner is drawn.
+        # The stored axis always determines this tile's main lane. Connected
+        # neighbors add sharp branches but cannot override the rotated direction.
         center = (round(cx), round(cy))
         dash_length = max(2.0, 4.0 * z)
         dash_gap = max(1.5, 2.8 * z)
         line_width = max(1, round(1.4 * z))
-        connected_sides = [
-            (name, dx, dy)
-            for name, neighbor, _a, _b, dx, dy in side_specs
-            if connected[name] and neighbor in self.roads
-        ]
-        if not connected_sides:
-            road_axis = self.road_directions.get((x, y), "x")
-            allowed_sides = ("east", "west") if road_axis == "x" else ("south", "north")
-            connected_sides = [
-                (name, dx, dy) for name, _neighbor, _a, _b, dx, dy in side_specs
-                if name in allowed_sides
-            ]
-        for _name, dx, dy in connected_sides:
-            length = math.hypot(dx, dy)
-            if length <= 0:
-                continue
-            ux, uy = dx / length, dy / length
-            offset = 0.0
-            while offset < length:
-                end_offset = min(length, offset + dash_length)
-                start_point = (round(cx + ux * offset), round(cy + uy * offset))
-                end_point = (round(cx + ux * end_offset), round(cy + uy * end_offset))
-                pygame.draw.line(
-                    self.canvas, C["road_center"], start_point, end_point, line_width
-                )
-                offset += dash_length + dash_gap
+        road_axis = self.road_directions.get((x, y), "x")
+        vectors = {
+            name: (dx, dy)
+            for name, _neighbor, _a, _b, dx, dy in side_specs
+        }
+        axis_sides = ("east", "west") if road_axis == "x" else ("south", "north")
+
+        if self.terrain[x][y].terrain == "water":
+            # A road placed on water is rendered as a timber bridge deck.
+            plank_color = (96, 65, 43)
+            plank_light = (177, 133, 80)
+            ax, ay = vectors[axis_sides[0]]
+            axis_length = max(1.0, math.hypot(ax, ay))
+            ax, ay = ax / axis_length, ay / axis_length
+            across_sides = ("south", "north") if road_axis == "x" else ("east", "west")
+            bx, by = vectors[across_sides[0]]
+            across_length = max(1.0, math.hypot(bx, by))
+            bx, by = bx / across_length, by / across_length
+            for offset in (-0.34, -0.17, 0.0, 0.17, 0.34):
+                px = cx + ax * offset * axis_length * 2.0
+                py = cy + ay * offset * axis_length * 2.0
+                p1 = (round(px - bx * across_length * 0.66),
+                      round(py - by * across_length * 0.66))
+                p2 = (round(px + bx * across_length * 0.66),
+                      round(py + by * across_length * 0.66))
+                pygame.draw.line(self.canvas, plank_color, p1, p2,
+                                 max(1, round(1.8 * z)))
+                pygame.draw.line(self.canvas, plank_light,
+                                 (p1[0], p1[1] - max(1, round(z))),
+                                 (p2[0], p2[1] - max(1, round(z))), 1)
+        else:
+            def draw_dashed_lane(start_point, end_point):
+                dx = end_point[0] - start_point[0]
+                dy = end_point[1] - start_point[1]
+                length = math.hypot(dx, dy)
+                if length <= 0:
+                    return
+                ux, uy = dx / length, dy / length
+                offset = 0.0
+                while offset < length:
+                    end_offset = min(length, offset + dash_length)
+                    p1 = (round(start_point[0] + ux * offset),
+                          round(start_point[1] + uy * offset))
+                    p2 = (round(start_point[0] + ux * end_offset),
+                          round(start_point[1] + uy * end_offset))
+                    pygame.draw.line(self.canvas, C["road_center"], p1, p2, line_width)
+                    offset += dash_length + dash_gap
+
+            # The full main axis is drawn even when both ends are connected.
+            main_a = vectors[axis_sides[0]]
+            main_b = vectors[axis_sides[1]]
+            draw_dashed_lane(
+                (cx + main_a[0], cy + main_a[1]),
+                (cx + main_b[0], cy + main_b[1])
+            )
+            for name, neighbor, _a, _b, dx, dy in side_specs:
+                if connected[name] and neighbor in self.roads and name not in axis_sides:
+                    draw_dashed_lane(center, (cx + dx, cy + dy))
 
         # The selected installed tile shows its stored orientation. Rotating
         # it changes this marker while the road network keeps its square joins.
