@@ -95,7 +95,7 @@ TOOL_HINTS = {
     "clear": "제거: 나무 +목재 2 · 바위 +석재 2",
     "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · 선택 후 R 회전",
     "house": "집: 도로 옆에 건설 · ₩3,000 + 목재 1 + 석재 1",
-    "dig": "굴착: 산 타일을 평탄화하고 석재 3 획득",
+    "dig": "굴착: 지상은 산을 한 층 굴착 · 지하는 광맥 채굴",
 }
 
 
@@ -1713,10 +1713,13 @@ class CityGame:
 
         outer = road_polygon(outer_limits)
         inner = road_polygon(inner_limits)
+        is_bridge = self.terrain[x][y].terrain == "water"
+        outer_color = (77, 54, 39) if is_bridge else C["road_edge"]
+        inner_color = (137, 99, 59) if is_bridge else C["road"]
         if len(outer) >= 3:
-            pygame.draw.polygon(self.canvas, C["road_edge"], outer)
+            pygame.draw.polygon(self.canvas, outer_color, outer)
         if len(inner) >= 3:
-            pygame.draw.polygon(self.canvas, C["road"], inner)
+            pygame.draw.polygon(self.canvas, inner_color, inner)
 
         # The stored axis always determines this tile's main lane. Connected
         # neighbors add sharp branches but cannot override the rotated direction.
@@ -2170,11 +2173,29 @@ class CityGame:
             self.draw_work_queue()
 
         else:
+            self.draw_work_queue()
             self.text(
                 self.canvas,
-                f"지하 단면 · 지층 {self.underground_layer}/3 · U: 지상 복귀 · [ ]: 지층 변경",
-                12, TOP_H + 5, 10, (224, 218, 187)
+                f"지하 단면 · 지층 {self.underground_layer}/3 · F6 + 클릭: 광맥 채굴 · U: 지상 복귀 · [ ]: 지층 변경",
+                12, TOP_H + 5, 9, (224, 218, 187)
             )
+            mouse = pygame.mouse.get_pos()
+            mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+            if VIEW_RECT.collidepoint(mx, my):
+                tile = self.screen_to_tile(mx, my)
+                if tile:
+                    vx, vy = tile
+                    vcx, vcy = self.tile_to_screen(vx, vy)
+                    vein_allowed = (
+                        self.tool == "dig"
+                        and self.can_mine_underground_vein(vx, vy, self.underground_layer)
+                    )
+                    vein_color = C["green"] if vein_allowed else C["red"]
+                    pygame.draw.polygon(
+                        self.canvas, vein_color,
+                        self.diamond(vcx, vcy, TILE_W * self.zoom, TILE_H * self.zoom),
+                        max(1, round(1.2 * self.zoom))
+                    )
 
         if not self.underground_view:
             # Tile cursor / placement preview.
