@@ -491,10 +491,16 @@ class CityGame:
         )
 
     def rotate_map(self, turns: int) -> None:
-        """Rotate the entire isometric map in 90-degree steps."""
+        """Rotate the entire isometric map while preserving the current focal point."""
+        focus_tile = (MAP_W // 2, MAP_H // 2)
+        before_x, before_y = self.tile_to_screen(*focus_tile)
         self.map_rotation = (self.map_rotation + turns) % 4
         if self.camera_follow_worker:
             self.center_camera_on_worker()
+        else:
+            after_x, after_y = self.tile_to_screen(*focus_tile)
+            self.camera_x += before_x - after_x
+            self.camera_y += before_y - after_y
         self.notify(f"지도 회전: {self.map_rotation * 90}도", 1.8)
 
     def unlocked_bounds(self) -> Tuple[int, int, int, int]:
@@ -1779,6 +1785,13 @@ class CityGame:
         bob = abs(walk_swing) * 1.15 * z if moving else 0.0
 
         facing_x, facing_y = self.worker_facing
+        rotation = self.map_rotation % 4
+        if rotation == 1:
+            facing_x, facing_y = -facing_y, facing_x
+        elif rotation == 2:
+            facing_x, facing_y = -facing_x, -facing_y
+        elif rotation == 3:
+            facing_x, facing_y = facing_y, -facing_x
         screen_direction = facing_x - facing_y
         screen_side = 1 if screen_direction >= 0 else -1
         facing_front = (facing_x + facing_y) > 0
