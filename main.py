@@ -909,14 +909,155 @@ class CityGame:
         self.selected_building_type = BUILDING_CYCLE[
             (current + direction) % len(BUILDING_CYCLE)
         ]
-        spec = CITY_OBJECT_DEFS.get(self.selected_building_type)
-        if spec:
-            self.notify(
-                f"건설 종류: {spec['label']} · {spec['w']}×{spec['h']}",
-                1.8
-            )
+        label = (
+            "주택" if self.selected_building_type == "house"
+            else "채굴장" if self.selected_building_type == "mine"
+            else CITY_OBJECT_DEFS[self.selected_building_type]["label"]
+        )
+        self.notify(f"건설 종류: {label}", 1.8)
+
+    def build_palette_geometry(self) -> Tuple[pygame.Rect, List[pygame.Rect]]:
+        """Return an anchored 3x3 building palette clamped inside the map view."""
+        width, height = 246, 132
+        anchor = self.build_palette_anchor or (self.worker_x, self.worker_y)
+        ax, ay = self.tile_to_screen(*anchor)
+        px = round(ax + 18)
+        if px + width > LOGICAL_W - 4:
+            px = round(ax - width - 18)
+        px = int(clamp(px, 4, LOGICAL_W - width - 4))
+        py = int(clamp(round(ay - height / 2), TOP_H + 4, BOTTOM_Y - height - 4))
+        panel = pygame.Rect(px, py, width, height)
+        cells: List[pygame.Rect] = []
+        cell_w, cell_h, gap = 72, 30, 4
+        for index in range(len(BUILD_MENU_ITEMS)):
+            col, row = index % 3, index // 3
+            cells.append(pygame.Rect(
+                px + 8 + col * (cell_w + gap),
+                py + 24 + row * (cell_h + gap),
+                cell_w, cell_h
+            ))
+        return panel, cells
+
+    def build_palette_hit_test(self, pos: Tuple[int, int]) -> Optional[int]:
+        if not self.build_palette_open:
+            return None
+        _panel, cells = self.build_palette_geometry()
+        for index, rect in enumerate(cells):
+            if rect.collidepoint(pos):
+                return index
+        return None
+
+    def open_build_palette(self, anchor: Tuple[int, int]) -> None:
+        """Click a tile to open the palette; holding and releasing on an option selects it."""
+        found = self.city_object_at(*anchor)
+        if found is not None:
+            self.selected_structure_anchor = found[0]
+            self.notify("건물을 선택했어요. G 키로 업그레이드할 수 있어요.", 2.2)
+            return
+        self.selected_structure_anchor = None
+        self.build_palette_anchor = anchor
+        self.build_palette_open = True
+        self.build_palette_dragging = True
+        self.build_palette_pressed_index = None
+        self.build_palette_hover_index = None
+
+    def close_build_palette(self) -> None:
+        self.build_palette_open = False
+        self.build_palette_anchor = None
+        self.build_palette_dragging = False
+        self.build_palette_hover_index = None
+        self.build_palette_pressed_index = None
+
+    def choose_building_from_palette(self, index: int) -> None:
+        if not self.build_palette_open or self.build_palette_anchor is None:
+            return
+        if not 0 <= index < len(BUILD_MENU_ITEMS):
+            return
+        kind = BUILD_MENU_ITEMS[index][0]
+        anchor = self.build_palette_anchor
+        self.close_build_palette()
+        self.selected_building_type = kind
+        self.toggle_work_order(kind, *anchor)
+
+    def draw_build_palette(self) -> None:
+        """Render the floating, hoverable nine-item building selector."""
+        if not self.build_palette_open:
+            return
+        panel, cells = self.build_palette_geometry()
+        pygame.draw.rect(self.canvas, (24, 32, 37), panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        self.text(self.canvas, "건설할 건물 선택 · 놓으면 예약", panel.centerx,
+                  panel.y + 12, 9, C["gold"], center=True)
+        for index, (_kind, label, size) in enumerate(BUILD_MENU_ITEMS):
+            rect = cells[index]
+            active = index == self.build_palette_hover_index
+            fill = (112, 132, 103) if active else C["panel2"]
+            edge = C["white"] if active else (91, 112, 105)
+            pygame.draw.rect(self.canvas, edge, rect)
+            pygame.draw.rect(self.canvas, fill, rect.inflate(-2, -2))
+            text_color = (35, 43, 38) if active else C["text"]
+            sub_color = (35, 43, 38) if active else C["muted"]
+            self.text(self.canvas, label, rect.centerx, rect.y + 8,
+                      9, text_color, center=True)
+            self.text(self.canvas, size, rect.centerx, rect.y + 21,
+                      7, sub_color, center=True)
+        self.text(self.canvas, "취소: ESC 또는 메뉴 밖 클릭", panel.centerx,
+                  panel.bottom - 7, 7, C["muted"], center=True)
+
+    def upgrade_selected_structure(self) -> None:
+        """Upgrade a selected home or city building up to level three."""
+        anchor = self.selected_structure_anchor
+        if anchor is None:
+            self.notify("먼저 F4 건설 모드에서 기존 건물을 클릭해 선택하세요.", 2.5)
+            return
+        found = self.city_object_at(*anchor)
+        if found is None:
+            self.selected_structure_anchor = None
+            self.notify("선택한 건물을 찾을 수 없어요.", 2)
+            return
+        _anchor, kind, level = found
+        if kind not in UPGRADABLE_OBJECTS:
+            self.notify("이 시설은 업그레이드할 수 없어요.", 2.2)
+            return
+        if level >= 3:
+            self.notify("이미 최대 단계예요.", 2)
+            return
+
+        if kind == "house":
+            base_money, base_wood, base_stone = 2500, 2, 1
         else:
-            self.notify("건설 종류: 주택 · 1×1", 1.8)
+            spec = CITY_OBJECT_DEFS[kind]
+            base_money = int(spec["money"])
+            base_wood = int(spec["wood"])
+            base_stone = int(spec["stone"])
+        money_cost = base_money * level // 2
+        wood_cost = base_wood + level
+        stone_cost = base_stone + level
+        reserved_wood, reserved_stone = self.reserved_material_costs()
+        if self.money - self.reserved_build_cost() < money_cost:
+            self.notify(f"업그레이드 자금이 부족해요. 필요 자금 ₩{money_cost:,}", 2.5)
+            return
+        if (self.wood - reserved_wood < wood_cost
+                or self.stone - reserved_stone < stone_cost):
+            self.notify(
+                f"업그레이드 재료가 부족해요. 목재 {wood_cost} · 석재 {stone_cost}", 2.5
+            )
+            return
+
+        self.money -= money_cost
+        self.wood -= wood_cost
+        self.stone -= stone_cost
+        new_level = level + 1
+        if kind == "house":
+            self.house_levels[anchor] = new_level
+            self.population += 2
+        else:
+            self.city_objects[anchor]["level"] = new_level
+        name = "주택" if kind == "house" else CITY_OBJECT_DEFS[kind]["label"]
+        extra = " · 주민 +2" if kind == "house" else ""
+        self.notify(
+            f"{name} 업그레이드 완료 · Lv.{new_level}{extra} · -₩{money_cost:,}", 3
+        )
 
     def can_build_on(self, x: int, y: int, allow_worker: bool = False) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
