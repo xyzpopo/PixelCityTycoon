@@ -543,6 +543,14 @@ class CityGame:
             return y, MAP_H - 1 - x
         return x, y
 
+    def screen_neighbor(self, x: int, y: int, dx: int, dy: int) -> Tuple[int, int]:
+        """Return a neighboring world tile in a direction on the rotated screen."""
+        rx, ry = self.rotate_grid_position(x, y)
+        nrx, nry = rx + dx, ry + dy
+        if not (0 <= nrx < MAP_W and 0 <= nry < MAP_H):
+            return -1, -1
+        return self.unrotate_grid_position(nrx, nry)
+
     def tile_to_screen(self, x: int, y: int) -> Tuple[float, float]:
         tw = TILE_W * self.zoom
         th = TILE_H * self.zoom
@@ -1371,16 +1379,16 @@ class CityGame:
             bottom = (round(cx), round(cy + th / 2))
             left = (round(cx - tw / 2), round(cy))
             shoreline_sides = (
-                ((x + 1, y), [right, bottom,
+                (self.screen_neighbor(x, y, 1, 0), [right, bottom,
                               (round(cx + tw * 0.16), round(cy + th * 0.34)),
                               (round(cx + tw * 0.34), round(cy + th * 0.16))]),
-                ((x - 1, y), [top, left,
+                (self.screen_neighbor(x, y, -1, 0), [top, left,
                               (round(cx - tw * 0.34), round(cy - th * 0.16)),
                               (round(cx - tw * 0.16), round(cy - th * 0.34))]),
-                ((x, y + 1), [left, bottom,
+                (self.screen_neighbor(x, y, 0, 1), [left, bottom,
                               (round(cx - tw * 0.34), round(cy + th * 0.16)),
                               (round(cx - tw * 0.16), round(cy + th * 0.34))]),
-                ((x, y - 1), [top, right,
+                (self.screen_neighbor(x, y, 0, -1), [top, right,
                               (round(cx + tw * 0.34), round(cy - th * 0.16)),
                               (round(cx + tw * 0.16), round(cy - th * 0.34))]),
             )
@@ -1475,8 +1483,8 @@ class CityGame:
         left = (round(cx - tw / 2), round(cy))
 
         for nx, ny, edge_a, edge_b, base_color in (
-            (x + 1, y, right, bottom, (77, 87, 78)),
-            (x, y + 1, left, bottom, (61, 72, 69)),
+            (*self.screen_neighbor(x, y, 1, 0), right, bottom, (77, 87, 78)),
+            (*self.screen_neighbor(x, y, 0, 1), left, bottom, (61, 72, 69)),
         ):
             if (not (0 <= nx < MAP_W and 0 <= ny < MAP_H)
                     or not self.is_unlocked(nx, ny)):
@@ -1492,9 +1500,12 @@ class CityGame:
                 continue
 
             wall_drop = round(drop * ELEVATION_STEP * self.zoom)
+            tile_rx, tile_ry = self.rotate_grid_position(x, y)
+            neighbor_rx, neighbor_ry = self.rotate_grid_position(nx, ny)
+            worker_rx, worker_ry = self.rotate_grid_float(worker_gx, worker_gy)
             near_worker = (
-                abs(nx - worker_gx) + abs(ny - worker_gy) <= 4
-                and (x + y) > (worker_gx + worker_gy)
+                abs(neighbor_rx - worker_rx) + abs(neighbor_ry - worker_ry) <= 4
+                and (tile_rx + tile_ry) > (worker_rx + worker_ry)
             )
             alpha = 125 if near_worker else 255
             color = (*base_color, alpha)
@@ -1565,10 +1576,10 @@ class CityGame:
         # present across one side, that side's inset is removed so both tiles
         # meet exactly at their shared edge.
         side_specs = (
-            ("east", (x + 1, y), 1.0, 1.0, tw * 0.25, th * 0.25),
-            ("west", (x - 1, y), -1.0, -1.0, -tw * 0.25, -th * 0.25),
-            ("south", (x, y + 1), -1.0, 1.0, -tw * 0.25, th * 0.25),
-            ("north", (x, y - 1), 1.0, -1.0, tw * 0.25, -th * 0.25),
+            ("east", self.screen_neighbor(x, y, 1, 0), 1.0, 1.0, tw * 0.25, th * 0.25),
+            ("west", self.screen_neighbor(x, y, -1, 0), -1.0, -1.0, -tw * 0.25, -th * 0.25),
+            ("south", self.screen_neighbor(x, y, 0, 1), -1.0, 1.0, -tw * 0.25, th * 0.25),
+            ("north", self.screen_neighbor(x, y, 0, -1), 1.0, -1.0, tw * 0.25, -th * 0.25),
         )
         connected = {
             name: (neighbor in self.roads and self.is_unlocked(*neighbor))
@@ -1643,6 +1654,8 @@ class CityGame:
         dash_gap = max(1.5, 2.8 * z)
         line_width = max(1, round(1.4 * z))
         road_axis = self.road_directions.get((x, y), "x")
+        if self.map_rotation % 2:
+            road_axis = "y" if road_axis == "x" else "x"
         vectors = {
             name: (dx, dy)
             for name, _neighbor, _a, _b, dx, dy in side_specs
@@ -1704,7 +1717,10 @@ class CityGame:
         # The selected installed tile shows its stored orientation. Rotating
         # it changes this marker while the road network keeps its square joins.
         if self.selected_road_tile == (x, y):
-            axis_mark = "↘" if self.road_directions.get((x, y), "x") == "x" else "↙"
+            stored_axis = self.road_directions.get((x, y), "x")
+            if self.map_rotation % 2:
+                stored_axis = "y" if stored_axis == "x" else "x"
+            axis_mark = "↘" if stored_axis == "x" else "↙"
             self.text(self.canvas, axis_mark, center[0], center[1], 8, C["white"], center=True)
             selected_outline = self.diamond(cx, cy, tw, th)
             pygame.draw.polygon(
@@ -1995,8 +2011,10 @@ class CityGame:
                 bottom = (round(cx), round(cy + th / 2))
                 left = (round(cx - tw / 2), round(cy))
 
-                # The edge shared with (x+1, y) is the right-bottom edge.
-                if not self.is_unlocked(x + 1, y):
+                # Screen-right and screen-down neighbors remain correct after rotation.
+                right_neighbor = self.screen_neighbor(x, y, 1, 0)
+                down_neighbor = self.screen_neighbor(x, y, 0, 1)
+                if not self.is_unlocked(*right_neighbor):
                     pygame.draw.polygon(
                         self.canvas, wall_color_a,
                         [right, bottom,
@@ -2009,8 +2027,7 @@ class CityGame:
                         (right[0], right[1] + wall_depth), 1
                     )
 
-                # The edge shared with (x, y+1) is the left-bottom edge.
-                if not self.is_unlocked(x, y + 1):
+                if not self.is_unlocked(*down_neighbor):
                     pygame.draw.polygon(
                         self.canvas, wall_color_b,
                         [left, bottom,
@@ -2092,9 +2109,12 @@ class CityGame:
                     cx, cy = self.tile_to_screen(x, y)
                     pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
                     if self.tool == "house":
-                        allowed = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
+                        allowed = (
+                            self.can_build_on(x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y))
+                            and self.has_planned_adjacent_road(x, y)
+                        )
                     elif self.tool == "road":
-                        allowed = self.can_build_on(x, y) or (x, y) in self.roads
+                        allowed = self.can_build_road_on(x, y) or (x, y) in self.roads
                     elif self.tool == "clear":
                         allowed = (x, y) in self.trees or (x, y) in self.rocks
                     elif self.tool == "dig":
