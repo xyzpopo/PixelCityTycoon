@@ -979,18 +979,22 @@ class CityGame:
             if 1 <= abs(dx) + abs(dy) <= ACTION_RANGE
             and self.worker_can_stand(tx + dx, ty + dy)
         }
-        return self.find_path_to_any_position((self.worker_x, self.worker_y), positions)
+        return self.find_path_to_any_position(
+            (self.worker_x, self.worker_y), positions, blocked={target}
+        )
 
     def find_path_to_any_position(
         self,
         start: Tuple[int, int],
-        goals: Set[Tuple[int, int]]
+        goals: Set[Tuple[int, int]],
+        blocked: Optional[Set[Tuple[int, int]]] = None,
     ) -> Optional[List[Tuple[int, int]]]:
         """Shared breadth-first path search for multiple possible work positions."""
         if not goals:
             return None
         if start in goals:
             return []
+        blocked_tiles = blocked or set()
 
         frontier = [start]
         came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
@@ -1005,7 +1009,8 @@ class CityGame:
             x, y = current
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 nxt = (x + dx, y + dy)
-                if nxt in came_from or not self.can_step_worker(current, nxt):
+                if (nxt in came_from or nxt in blocked_tiles
+                        or not self.can_step_worker(current, nxt)):
                     continue
                 came_from[nxt] = current
                 frontier.append(nxt)
