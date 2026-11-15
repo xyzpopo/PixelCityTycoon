@@ -3000,20 +3000,33 @@ class CityGame:
                     cx, cy = self.tile_to_screen(x, y)
                     pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
                     if self.tool == "house":
-                        allowed = (
-                            self.can_build_on(x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y))
-                            and self.has_planned_adjacent_road(x, y)
+                        if self.build_palette_open and self.build_palette_hover_index is not None:
+                            preview_kind = BUILD_MENU_ITEMS[self.build_palette_hover_index][0]
+                            preview_anchor = self.build_palette_anchor or (x, y)
+                        else:
+                            preview_kind = self.selected_building_type if not self.build_palette_open else "house"
+                            preview_anchor = self.build_palette_anchor or (x, y)
+                        preview_footprint = self.footprint_for(preview_kind, *preview_anchor)
+                        allowed, _reason = self.can_reserve_work_order(
+                            preview_kind, *preview_anchor
                         )
+                        for fx, fy in preview_footprint:
+                            if not (0 <= fx < MAP_W and 0 <= fy < MAP_H):
+                                continue
+                            fcx, fcy = self.tile_to_screen(fx, fy)
+                            fpts = self.diamond(
+                                fcx, fcy, TILE_W*self.zoom, TILE_H*self.zoom
+                            )
+                            pygame.draw.polygon(
+                                self.canvas, C["green"] if allowed else C["red"],
+                                fpts, max(1, round(1.4*self.zoom))
+                            )
                     elif self.tool == "road":
                         allowed = self.can_build_road_on(x, y) or (x, y) in self.roads
                     elif self.tool == "clear":
                         allowed = (x, y) in self.trees or (x, y) in self.rocks
                     elif self.tool == "demolish":
-                        allowed = (
-                            (x, y) in self.roads
-                            or (x, y) in self.houses
-                            or (x, y) in self.mines
-                        )
+                        allowed = (x, y) in self.roads or self.city_object_at(x, y) is not None
                     elif self.tool == "dig":
                         allowed = self.can_dig_terrain(x, y)
                     elif self.tool == "mine":
