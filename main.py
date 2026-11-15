@@ -2173,7 +2173,10 @@ class CityGame:
             self.draw_work_queue()
 
         else:
-            self.draw_work_queue()
+            self.draw_work_queue(underground_only=True)
+            # Keep the worker visible in the cutaway so underground jobs and
+            # camera-follow movement remain understandable.
+            self.draw_worker()
             self.text(
                 self.canvas,
                 f"지하 단면 · 지층 {self.underground_layer}/3 · F6 + 클릭: 광맥 채굴 · U: 지상 복귀 · [ ]: 지층 변경",
@@ -2238,8 +2241,8 @@ class CityGame:
         self.draw_tutorial_card()
         self.canvas.set_clip(None)
 
-    def draw_work_queue(self) -> None:
-        """Mark all queued work sites with their order and action color."""
+    def draw_work_queue(self, underground_only: bool = False) -> None:
+        """Mark queued work sites, optionally showing only underground mining."""
         order_colors = {
             "clear": C["gold"],
             "road": (190, 198, 190),
@@ -2249,7 +2252,11 @@ class CityGame:
             "vein2": (157, 168, 179),
             "vein3": (126, 147, 176),
         }
-        for index, (tool, x, y) in enumerate(self.work_queue, start=1):
+        visible_orders = [
+            order for order in self.work_queue
+            if order[0].startswith("vein") == underground_only
+        ]
+        for index, (tool, x, y) in enumerate(visible_orders, start=1):
             if not self.is_unlocked(x, y):
                 continue
             color = order_colors.get(tool, C["gold"])
@@ -2439,6 +2446,14 @@ class CityGame:
 
     def apply_single_tile_click(self, tile: Tuple[int, int]) -> None:
         x, y = tile
+        if self.underground_view:
+            if self.tool == "move":
+                self.set_worker_destination(x, y)
+            elif self.tool == "dig":
+                self.toggle_work_order(f"vein{self.underground_layer}", x, y)
+            else:
+                self.notify("지하에서는 이동 모드 또는 F6 채굴 모드를 사용하세요.", 2.5)
+            return
         if self.tool == "road" and (x, y) in self.roads:
             self.selected_road_tile = (x, y)
             self.notify("설치된 도로를 선택했어요. R 또는 [도로 회전]으로 방향을 바꿔요.", 2.5)
@@ -2454,6 +2469,8 @@ class CityGame:
 
     def queue_drag_order(self, tool: str, x: int, y: int) -> None:
         """Queue one drag-painted tile without toggling existing reservations off."""
+        if self.underground_view and tool != "dig":
+            return
         if any(order[1] == x and order[2] == y for order in self.work_queue):
             return
         if len(self.work_queue) >= MAX_WORK_QUEUE:
