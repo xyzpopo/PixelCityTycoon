@@ -1261,55 +1261,77 @@ class CityGame:
                 max(1, round(self.zoom))
             )
 
-    def draw_elevation_cliffs(self) -> None:
-        """Draw stepped cliff faces and fade nearby foreground walls around the worker."""
+    def draw_elevation_cliff_faces(
+        self, x: int, y: int, worker_gx: float, worker_gy: float
+    ) -> None:
+        """Draw only this tile's exposed cliff faces before foreground tiles."""
+        height = self.terrain[x][y].height
+        if height <= 0:
+            return
+
         layer = self.cliff_layer
-        layer.fill((0, 0, 0, 0))
-        layer.set_clip(VIEW_RECT)
         tw, th = TILE_W * self.zoom, TILE_H * self.zoom
-        worker_gx, worker_gy = self.worker_grid_position()
-        worker_depth = worker_gx + worker_gy
-        for depth in range(MAP_W + MAP_H - 1):
-            for x in range(MAP_W):
-                y = depth - x
-                if not (0 <= y < MAP_H) or not self.is_unlocked(x, y):
-                    continue
-                height = self.terrain[x][y].height
-                if height <= 0:
-                    continue
-                cx, cy = self.tile_to_screen(x, y)
-                if cx < -100 or cx > LOGICAL_W + 100 or cy < TOP_H - 130 or cy > BOTTOM_Y + 100:
-                    continue
-                right = (round(cx + tw / 2), round(cy))
-                bottom = (round(cx), round(cy + th / 2))
-                left = (round(cx - tw / 2), round(cy))
-                for nx, ny, edge_a, edge_b, base_color in (
-                    (x + 1, y, right, bottom, (77, 87, 78)),
-                    (x, y + 1, left, bottom, (61, 72, 69)),
-                ):
-                    if not (0 <= nx < MAP_W and 0 <= ny < MAP_H) or not self.is_unlocked(nx, ny):
-                        continue
-                    drop = height - self.terrain[nx][ny].height
-                    if drop <= 0:
-                        continue
-                    wall_drop = round(drop * ELEVATION_STEP * self.zoom)
-                    near_worker = (
-                        abs(nx - worker_gx) + abs(ny - worker_gy) <= 4
-                        and (x + y) > worker_depth
-                    )
-                    alpha = 125 if near_worker else 255
-                    color = (*base_color, alpha)
-                    lower_a = (edge_a[0], edge_a[1] + wall_drop)
-                    lower_b = (edge_b[0], edge_b[1] + wall_drop)
-                    pygame.draw.polygon(
-                        layer, color, [edge_a, edge_b, lower_b, lower_a]
-                    )
-                    pygame.draw.line(
-                        layer, (38, 48, 45, alpha), lower_a, lower_b,
-                        max(1, round(self.zoom))
-                    )
-        layer.set_clip(None)
-        self.canvas.blit(layer, (0, 0))
+        cx, cy = self.tile_to_screen(x, y)
+        if (cx < -100 or cx > LOGICAL_W + 100
+                or cy < TOP_H - 130 or cy > BOTTOM_Y + 100):
+            return
+
+        right = (round(cx + tw / 2), round(cy))
+        bottom = (round(cx), round(cy + th / 2))
+        left = (round(cx - tw / 2), round(cy))
+
+        for nx, ny, edge_a, edge_b, base_color in (
+            (x + 1, y, right, bottom, (77, 87, 78)),
+            (x, y + 1, left, bottom, (61, 72, 69)),
+        ):
+            if (not (0 <= nx < MAP_W and 0 <= ny < MAP_H)
+                    or not self.is_unlocked(nx, ny)):
+                continue
+
+            # Water is a shoreline, not a solid lower ground tile. Do not
+            # cover it with an opaque soil wall.
+            if self.terrain[nx][ny].terrain == "water":
+                continue
+
+            drop = height - self.terrain[nx][ny].height
+            if drop <= 0:
+                continue
+
+            wall_drop = round(drop * ELEVATION_STEP * self.zoom)
+            near_worker = (
+                abs(nx - worker_gx) + abs(ny - worker_gy) <= 4
+                and (x + y) > (worker_gx + worker_gy)
+            )
+            alpha = 125 if near_worker else 255
+            color = (*base_color, alpha)
+            lower_a = (edge_a[0], edge_a[1] + wall_drop)
+            lower_b = (edge_b[0], edge_b[1] + wall_drop)
+
+            bounds = pygame.Rect(
+                min(edge_a[0], edge_b[0], lower_a[0], lower_b[0]),
+                min(edge_a[1], edge_b[1], lower_a[1], lower_b[1]),
+                max(edge_a[0], edge_b[0], lower_a[0], lower_b[0])
+                - min(edge_a[0], edge_b[0], lower_a[0], lower_b[0]) + 1,
+                max(edge_a[1], edge_b[1], lower_a[1], lower_b[1])
+                - min(edge_a[1], edge_b[1], lower_a[1], lower_b[1]) + 1,
+            ).clip(VIEW_RECT)
+            if bounds.width <= 0 or bounds.height <= 0:
+                continue
+
+            # Clear this small buffer region, draw one face, and composite it
+            # immediately. A later foreground tile can then cover the part
+            # that belongs to its own top surface.
+            layer.fill((0, 0, 0, 0), bounds)
+            layer.set_clip(bounds)
+            pygame.draw.polygon(
+                layer, color, [edge_a, edge_b, lower_b, lower_a]
+            )
+            pygame.draw.line(
+                layer, (38, 48, 45, alpha), lower_a, lower_b,
+                max(1, round(self.zoom))
+            )
+            layer.set_clip(None)
+            self.canvas.blit(layer, (0, 0), bounds)
 
     def draw_tree(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
@@ -1718,8 +1740,9 @@ class CityGame:
         wall_color_a = (91, 63, 48)
         wall_color_b = (62, 47, 43)
 
-        # Draw only unlocked tiles, back-to-front. The exposed southern edges
-        # receive a small soil wall so the map reads as a raised land platform.
+        # Draw top faces and their cliff walls in ground-depth order. Each wall
+        # is composited before the next foreground tile is drawn.
+        worker_gx, worker_gy = self.worker_grid_position()
         for depth in range(MAP_W + MAP_H - 1):
             for x in range(MAP_W):
                 y = depth - x
@@ -1731,6 +1754,7 @@ class CityGame:
                     continue
 
                 self.draw_tile(x, y)
+                self.draw_elevation_cliff_faces(x, y, worker_gx, worker_gy)
                 wall_depth = max(
                     4, round((8 + self.terrain[x][y].height * ELEVATION_STEP) * self.zoom)
                 )
@@ -1775,7 +1799,6 @@ class CityGame:
                 if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
                     self.draw_road(x, y)
 
-        self.draw_elevation_cliffs()
         self.draw_worker_path_preview()
 
         depth_items: List[Tuple[float, float, int, int, int, str]] = []
