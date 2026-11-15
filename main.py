@@ -95,13 +95,16 @@ C = {
 }
 
 TOOL_NAMES = [
-    "F1 이동", "F2 철거", "F3 도로", "F4 집",
-    "F6 굴착", "F7 채굴장", "F8 복원"
+    "F1 이동", "F2 자연", "F3 도로", "F4 집",
+    "F6 굴착", "F7 채굴", "F8 복원", "F10 인공"
 ]
-TOOL_KEYS = ["move", "clear", "road", "house", "dig", "mine", "restore"]
+TOOL_KEYS = [
+    "move", "clear", "road", "house", "dig", "mine", "restore", "demolish"
+]
 TOOL_HINTS = {
     "move": "이동: 빈 땅을 클릭해 작업자를 이동합니다.",
-    "clear": "철거: 나무·바위·도로·주택·채굴장 제거",
+    "clear": "자연 제거: 나무·바위만 제거 · 목재/석재 획득",
+    "demolish": "인공 철거: 도로·다리·주택·채굴장 제거",
     "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
     "house": "집: 도로 옆 건설 · ₩3,000 + 목재 1 + 석재 1",
     "dig": "굴착: 산을 한 층 낮추고 석재 획득",
@@ -892,12 +895,13 @@ class CityGame:
             return False, "아직 개척하지 않은 땅이에요. 먼저 땅을 확장하세요."
 
         if tool == "clear":
-            if not (
-                (x, y) in self.trees or (x, y) in self.rocks
-                or (x, y) in self.roads or (x, y) in self.houses
-                or (x, y) in self.mines
-            ):
-                return False, "철거할 나무·바위·도로·건물이 없어요."
+            if (x, y) not in self.trees and (x, y) not in self.rocks:
+                return False, "자연 제거 대상인 나무나 바위가 없어요."
+            return True, ""
+
+        if tool == "demolish":
+            if (x, y) not in self.roads and (x, y) not in self.houses and (x, y) not in self.mines:
+                return False, "인공 철거 대상인 도로·주택·채굴장이 없어요."
             return True, ""
 
         if tool == "dig":
@@ -952,7 +956,7 @@ class CityGame:
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
         """Queue or cancel demolition, construction, digging or terrain restoration."""
-        if tool not in ("clear", "road", "house", "dig", "mine", "restore"):
+        if tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
             return
 
         existing_index = next(
@@ -996,7 +1000,8 @@ class CityGame:
         if tool == "road":
             self.road_directions[(x, y)] = self.infer_road_axis(x, y)
         labels = {
-            "clear": "철거", "road": "도로 건설", "house": "주택 건설",
+            "clear": "자연 제거", "demolish": "인공 철거",
+            "road": "도로 건설", "house": "주택 건설",
             "dig": "지형 굴착", "mine": "채굴장 건설", "restore": "지형 복원",
         }
         self.notify(
@@ -1090,7 +1095,7 @@ class CityGame:
         return path
 
     def remove_resource_at(self, x: int, y: int, start_animation: bool = True) -> bool:
-        """Clear natural resources or demolish a road/building on the target tile."""
+        """Remove natural resources only: trees and rocks."""
         target = (x, y)
         if target in self.trees:
             self.trees.remove(target)
@@ -1108,29 +1113,32 @@ class CityGame:
             self.stone += 2
             self.notify("바위를 제거했어요! 석재 +2")
             return True
+        return False
+
+    def demolish_structure_at(
+        self, x: int, y: int, start_animation: bool = True
+    ) -> bool:
+        """Demolish artificial structures only; demolition refunds no resources."""
+        target = (x, y)
         if target in self.roads:
             self.roads.remove(target)
             self.road_directions.pop(target, None)
             if self.selected_road_tile == target:
                 self.selected_road_tile = None
-            if start_animation:
-                self.start_worker_action("mine", x, y)
-            self.notify("도로를 철거했어요. 자원은 반환되지 않아요.")
-            return True
-        if target in self.houses:
+            self.notify("도로/다리를 철거했어요. 자원은 반환되지 않아요.")
+        elif target in self.houses:
             self.houses.remove(target)
             self.population = max(0, self.population - 4)
-            if start_animation:
-                self.start_worker_action("mine", x, y)
             self.notify("주택을 철거했어요. 주민 4명이 도시를 떠났어요.")
-            return True
-        if target in self.mines:
+        elif target in self.mines:
             del self.mines[target]
-            if start_animation:
-                self.start_worker_action("mine", x, y)
             self.notify("채굴장을 철거했어요. 진행 중이던 채굴은 중단됐어요.")
-            return True
-        return False
+        else:
+            return False
+
+        if start_animation:
+            self.start_worker_action("mine", x, y)
+        return True
 
     def dig_terrain_at(self, x: int, y: int) -> bool:
         """Flatten one mountain tile and award stone at the mining impact frame."""
@@ -1245,11 +1253,9 @@ class CityGame:
         while self.work_queue:
             tool, x, y = self.work_queue[0]
             if tool == "clear":
-                valid = (
-                    (x, y) in self.trees or (x, y) in self.rocks
-                    or (x, y) in self.roads or (x, y) in self.houses
-                    or (x, y) in self.mines
-                )
+                valid = (x, y) in self.trees or (x, y) in self.rocks
+            elif tool == "demolish":
+                valid = (x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines
             elif tool == "road":
                 valid = self.can_build_road_on(x, y)
             elif tool == "house":
@@ -1305,6 +1311,8 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             action = "chop" if (x, y) in self.trees else "mine"
+        elif tool == "demolish":
+            action = "mine"
         elif tool == "dig":
             action = "mine"
         else:
@@ -1327,6 +1335,8 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             self.remove_resource_at(x, y, start_animation=False)
+        elif tool == "demolish":
+            self.demolish_structure_at(x, y, start_animation=False)
         elif tool == "dig":
             self.dig_terrain_at(x, y)
         elif tool == "restore":
@@ -1342,7 +1352,7 @@ class CityGame:
 
     def act_on_tile(self, x: int, y: int) -> None:
         """Compatibility entry point: all non-movement tools queue actions."""
-        if self.tool in ("clear", "road", "house", "dig", "mine", "restore"):
+        if self.tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
             self.toggle_work_order(self.tool, x, y)
 
     def check_tutorial(self) -> None:
@@ -1527,7 +1537,10 @@ class CityGame:
                         continue
                     tool = order.get("tool")
                     x, y = order.get("x"), order.get("y")
-                    if (tool not in ("clear", "road", "house", "dig", "mine", "restore")
+                    if (tool == "clear" and type(x) is int and type(y) is int
+                            and ((x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines)):
+                        tool = "demolish"
+                    if (tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore")
                             or type(x) is not int or type(y) is not int
                             or not (0 <= x < MAP_W and 0 <= y < MAP_H)
                             or not self.is_unlocked(x, y)):
@@ -1535,6 +1548,8 @@ class CityGame:
                     if any(ox == x and oy == y for _tool, ox, oy in self.work_queue):
                         continue
                     if tool == "clear" and (x, y) not in self.trees and (x, y) not in self.rocks:
+                        continue
+                    if tool == "demolish" and (x, y) not in self.roads and (x, y) not in self.houses and (x, y) not in self.mines:
                         continue
                     if tool == "dig" and not self.can_dig_terrain(x, y):
                         continue
@@ -2422,9 +2437,11 @@ class CityGame:
                     elif self.tool == "road":
                         allowed = self.can_build_road_on(x, y) or (x, y) in self.roads
                     elif self.tool == "clear":
+                        allowed = (x, y) in self.trees or (x, y) in self.rocks
+                    elif self.tool == "demolish":
                         allowed = (
-                            (x, y) in self.trees or (x, y) in self.rocks
-                            or (x, y) in self.roads or (x, y) in self.houses
+                            (x, y) in self.roads
+                            or (x, y) in self.houses
                             or (x, y) in self.mines
                         )
                     elif self.tool == "dig":
@@ -2462,7 +2479,8 @@ class CityGame:
         if underground_only:
             return
         order_colors = {
-            "clear": C["gold"],
+            "clear": C["green"],
+            "demolish": C["red"],
             "road": (190, 198, 190),
             "house": (238, 151, 111),
             "mine": (193, 166, 111),
@@ -2572,12 +2590,12 @@ class CityGame:
         # Compact toolbar: movement, clearing/demolition, construction and terrain tools.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, BOTTOM_Y), (LOGICAL_W, BOTTOM_Y), 1)
-        xs = [5, 58, 111, 164, 217, 270, 323]
+        xs = [4, 50, 96, 142, 188, 234, 280, 326]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
-            self.button(pygame.Rect(xs[i], 294, 50, 23), name, self.tool == key, small=True)
+            self.button(pygame.Rect(xs[i], 294, 43, 23), name, self.tool == key, small=True)
 
         self.button(
-            pygame.Rect(376, 294, 54, 23), "R 회전",
+            pygame.Rect(373, 294, 57, 23), "R 회전",
             self.tool == "road" and self.selected_road_tile is not None,
             small=True
         )
@@ -2639,12 +2657,12 @@ class CityGame:
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
-                tool_xs = [5, 58, 111, 164, 217, 270, 323]
+                tool_xs = [4, 50, 96, 142, 188, 234, 280, 326]
                 for i, tx in enumerate(tool_xs):
-                    if tx <= x <= tx + 50:
+                    if tx <= x <= tx + 43:
                         self.select_tool(TOOL_KEYS[i])
                         return
-                if 376 <= x <= 430:
+                if 373 <= x <= 430:
                     self.toggle_road_direction()
                     return
             if 434 <= x <= 514 and 294 <= y <= 317:
@@ -2707,7 +2725,7 @@ class CityGame:
                     self.tool_drag_last_tile = tile
                 elif self.tool == "road" and tile in self.roads:
                     self.selected_road_tile = tile
-                elif self.tool in ("clear", "road", "house", "dig", "mine", "restore"):
+                elif self.tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
                     self.queue_drag_order(self.tool, x0, y0)
             if x0 == x1 and y0 == y1:
                 break
@@ -2834,6 +2852,8 @@ class CityGame:
                         self.select_tool("move")
                     elif event.key == pygame.K_F2:
                         self.select_tool("clear")
+                    elif event.key == pygame.K_F10:
+                        self.select_tool("demolish")
                     elif event.key == pygame.K_F3:
                         self.select_tool("road")
                     elif event.key == pygame.K_F4:
@@ -2886,6 +2906,8 @@ class CityGame:
                         self.select_tool("mine")
                     elif event.key == pygame.K_7:
                         self.select_tool("restore")
+                    elif event.key == pygame.K_8:
+                        self.select_tool("demolish")
                     elif event.key == pygame.K_F5:
                         self.save_game()
                     elif event.key == pygame.K_F9:
