@@ -864,6 +864,20 @@ class CityGame:
             return False
         return True
 
+    def cycle_building_type(self, direction: int) -> None:
+        current = BUILDING_CYCLE.index(self.selected_building_type)
+        self.selected_building_type = BUILDING_CYCLE[
+            (current + direction) % len(BUILDING_CYCLE)
+        ]
+        spec = CITY_OBJECT_DEFS.get(self.selected_building_type)
+        if spec:
+            self.notify(
+                f"건설 종류: {spec['label']} · {spec['w']}×{spec['h']}",
+                1.8
+            )
+        else:
+            self.notify("건설 종류: 주택 · 1×1", 1.8)
+
     def can_build_on(self, x: int, y: int, allow_worker: bool = False) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
@@ -1033,8 +1047,8 @@ class CityGame:
             return True, ""
 
         if tool == "demolish":
-            if (x, y) not in self.roads and (x, y) not in self.houses and (x, y) not in self.mines:
-                return False, "인공 철거 대상인 도로·주택·채굴장이 없어요."
+            if (x, y) not in self.roads and self.city_object_at(x, y) is None:
+                return False, "인공 철거 대상인 도로·건물·시설이 없어요."
             return True, ""
 
         if tool == "dig":
@@ -1052,34 +1066,39 @@ class CityGame:
                 return False, f"지형 복원에는 석재 {TERRAIN_RESTORE_STONE_COST}개가 필요해요."
             return True, ""
 
-        if tool not in ("road", "house", "mine"):
-            return False, "예약할 수 없는 작업 종류예요."
-
         allow_worker = (x, y) == (self.worker_x, self.worker_y)
         if tool == "road":
             if not self.can_build_road_on(x, y):
                 return False, "도로는 빈 땅 또는 기존 도로에서 이어지는 물 위에만 놓을 수 있어요."
         elif tool == "house":
             if not self.can_build_on(x, y, allow_worker=allow_worker):
-                return False, "건설 예약은 비어 있는 잔디 타일에만 할 수 있어요."
-        elif not self.can_build_mine_on(x, y, allow_worker=allow_worker):
-            return False, "채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요."
+                return False, "주택은 비어 있는 잔디 타일에만 지을 수 있어요."
+            if not self.has_planned_adjacent_road(x, y):
+                return False, "주택은 이미 있는 도로나 먼저 예약한 도로 옆에 지어야 해요."
+        elif tool == "mine":
+            if not self.can_build_mine_on(x, y, allow_worker=allow_worker):
+                return False, "채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요."
+        elif tool in CITY_OBJECT_DEFS:
+            if not self.can_build_city_object(
+                tool, x, y, allow_worker=allow_worker
+            ):
+                spec = CITY_OBJECT_DEFS[tool]
+                if spec["road"]:
+                    return False, (
+                        f"{spec['label']}은 {spec['w']}×{spec['h']}칸의 평평한 빈 땅이 필요하고 "
+                        "도로와 인접해야 해요."
+                    )
+                return False, (
+                    f"{spec['label']}은 {spec['w']}×{spec['h']}칸의 평평한 빈 잔디 땅이 필요해요."
+                )
+        else:
+            return False, "예약할 수 없는 작업 종류예요."
 
         available_money = self.money - self.reserved_build_cost()
         reserved_wood, reserved_stone = self.reserved_material_costs()
         available_wood = self.wood - reserved_wood
         available_stone = self.stone - reserved_stone
-
-        if tool == "road":
-            money_cost, wood_cost, stone_cost = self.road_build_cost(x, y)
-        elif tool == "house":
-            money_cost, wood_cost, stone_cost = (
-                HOUSE_MONEY_COST, HOUSE_WOOD_COST, HOUSE_STONE_COST
-            )
-        else:
-            money_cost, wood_cost, stone_cost = (
-                MINE_MONEY_COST, MINE_WOOD_COST, MINE_STONE_COST
-            )
+        money_cost, wood_cost, stone_cost = self.order_costs(tool, x, y)
 
         if available_money < money_cost:
             return False, f"건설 자금이 부족해요. 필요 자금: ₩{money_cost:,}"
@@ -1089,7 +1108,7 @@ class CityGame:
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
         """Queue or cancel demolition, construction, digging or terrain restoration."""
-        if tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
+        if tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore", *CITY_OBJECT_DEFS.keys()):
             return
 
         existing_index = next(
@@ -1136,6 +1155,7 @@ class CityGame:
             "clear": "자연 제거", "demolish": "인공 철거",
             "road": "도로 건설", "house": "주택 건설",
             "dig": "지형 굴착", "mine": "채굴장 건설", "restore": "지형 복원",
+            **{kind: f"{spec['label']} 건설" for kind, spec in CITY_OBJECT_DEFS.items()},
         }
         self.notify(
             f"{labels[tool]} 예약 {len(self.work_queue)}개 · 클릭한 순서대로 작업합니다.",
@@ -1167,19 +1187,26 @@ class CityGame:
         return self.find_path_to_any_position(start, fallback_positions)
 
     def find_worker_path_to_action_target(
-        self, target: Tuple[int, int]
+        self,
+        target: Tuple[int, int],
+        footprint: Optional[Set[Tuple[int, int]]] = None,
     ) -> Optional[List[Tuple[int, int]]]:
-        """Find a path to a legal standing tile within normal construction range."""
+        """Find a legal work position beside every tile of a multi-tile target."""
         tx, ty = target
-        positions = {
-            (tx + dx, ty + dy)
-            for dx in range(-ACTION_RANGE, ACTION_RANGE + 1)
-            for dy in range(-ACTION_RANGE, ACTION_RANGE + 1)
-            if 1 <= abs(dx) + abs(dy) <= ACTION_RANGE
-            and self.worker_can_stand(tx + dx, ty + dy)
-        }
+        blocked_tiles = footprint or {target}
+        positions: Set[Tuple[int, int]] = set()
+        for fx, fy in blocked_tiles:
+            for dx in range(-ACTION_RANGE, ACTION_RANGE + 1):
+                for dy in range(-ACTION_RANGE, ACTION_RANGE + 1):
+                    candidate = (fx + dx, fy + dy)
+                    if (
+                        1 <= abs(dx) + abs(dy) <= ACTION_RANGE
+                        and candidate not in blocked_tiles
+                        and self.worker_can_stand(*candidate)
+                    ):
+                        positions.add(candidate)
         return self.find_path_to_any_position(
-            (self.worker_x, self.worker_y), positions, blocked={target}
+            (self.worker_x, self.worker_y), positions, blocked=blocked_tiles
         )
 
     def find_path_to_any_position(
@@ -1251,7 +1278,7 @@ class CityGame:
     def demolish_structure_at(
         self, x: int, y: int, start_animation: bool = True
     ) -> bool:
-        """Demolish artificial structures only; demolition refunds no resources."""
+        """Demolish the complete artificial object, including every footprint tile."""
         target = (x, y)
         if target in self.roads:
             self.roads.remove(target)
@@ -1259,15 +1286,27 @@ class CityGame:
             if self.selected_road_tile == target:
                 self.selected_road_tile = None
             self.notify("도로/다리를 철거했어요. 자원은 반환되지 않아요.")
-        elif target in self.houses:
-            self.houses.remove(target)
-            self.population = max(0, self.population - 4)
-            self.notify("주택을 철거했어요. 주민 4명이 도시를 떠났어요.")
-        elif target in self.mines:
-            del self.mines[target]
-            self.notify("채굴장을 철거했어요. 진행 중이던 채굴은 중단됐어요.")
         else:
-            return False
+            found = self.city_object_at(x, y)
+            if found is None:
+                return False
+            anchor, kind, _level = found
+            if kind == "house":
+                house_level = self.house_levels.pop(anchor, 1)
+                self.houses.discard(anchor)
+                self.population = max(0, self.population - (4 + 2 * (house_level - 1)))
+                self.notify("주택을 철거했어요. 주민이 도시를 떠났어요.")
+            elif kind == "mine":
+                self.mines.pop(anchor, None)
+                self.notify("채굴장을 철거했어요. 진행 중이던 채굴은 중단됐어요.")
+            elif anchor in self.city_objects:
+                del self.city_objects[anchor]
+                if self.selected_structure_anchor == anchor:
+                    self.selected_structure_anchor = None
+                name = CITY_OBJECT_DEFS[kind]["label"]
+                self.notify(f"{name}을 철거했어요. 자원은 반환되지 않아요.")
+            else:
+                return False
 
         if start_animation:
             self.start_worker_action("mine", x, y)
@@ -1308,7 +1347,7 @@ class CityGame:
         return True
 
     def perform_build_order(self, tool: str, x: int, y: int, start_animation: bool = True) -> bool:
-        """Apply a queued road, house or mine construction after the worker arrives."""
+        """Build roads, housing, mines, typed city buildings or decorative facilities."""
         if tool == "road":
             if not self.can_build_road_on(x, y):
                 self.notify("예약한 도로 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
@@ -1349,6 +1388,7 @@ class CityGame:
             self.wood -= HOUSE_WOOD_COST
             self.stone -= HOUSE_STONE_COST
             self.houses.add((x, y))
+            self.house_levels[(x, y)] = 1
             if start_animation:
                 self.start_worker_action("build", x, y)
             self.population += 4
@@ -1379,16 +1419,37 @@ class CityGame:
                 f"목재 -{MINE_WOOD_COST} · 석재 -{MINE_STONE_COST}", 3.5
             )
             return True
+
+        spec = CITY_OBJECT_DEFS.get(tool)
+        if spec is not None:
+            if not self.can_build_city_object(tool, x, y):
+                self.notify("예약한 건물/시설의 점유 공간을 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
+                return False
+            money_cost, wood_cost, stone_cost = self.order_costs(tool, x, y)
+            if self.money < money_cost or self.wood < wood_cost or self.stone < stone_cost:
+                self.notify("건설에 필요한 자금 또는 재료가 부족해 예약을 건너뛰었어요.", 2.8)
+                return False
+            self.money -= money_cost
+            self.wood -= wood_cost
+            self.stone -= stone_cost
+            self.city_objects[(x, y)] = {"type": tool, "level": 1}
+            if start_animation:
+                self.start_worker_action("build", x, y)
+            self.notify(
+                f"{spec['label']} 건설 완료 · {spec['w']}×{spec['h']}칸 · "
+                f"-₩{money_cost:,} · 목재 -{wood_cost} · 석재 -{stone_cost}", 3.2
+            )
+            return True
         return False
 
     def update_work_queue(self) -> None:
-        """Execute queued jobs in order, automatically moving the worker first."""
+        """Execute queued work in order and keep multi-tile footprints clear."""
         while self.work_queue:
             tool, x, y = self.work_queue[0]
             if tool == "clear":
                 valid = (x, y) in self.trees or (x, y) in self.rocks
             elif tool == "demolish":
-                valid = (x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines
+                valid = (x, y) in self.roads or self.city_object_at(x, y) is not None
             elif tool == "road":
                 valid = self.can_build_road_on(x, y)
             elif tool == "house":
@@ -1398,6 +1459,10 @@ class CityGame:
                 )
             elif tool == "mine":
                 valid = self.can_build_mine_on(x, y, allow_worker=True)
+            elif tool in CITY_OBJECT_DEFS:
+                valid = self.can_build_city_object(
+                    tool, x, y, allow_worker=True, ignore_order=(tool, x, y)
+                )
             elif tool == "dig":
                 valid = self.can_dig_terrain(x, y)
             elif tool == "restore":
@@ -1423,7 +1488,16 @@ class CityGame:
         if tool in ("clear", "dig"):
             path = self.find_worker_path_to_work_target(target)
         else:
-            path = self.find_worker_path_to_action_target(target)
+            footprint = (
+                self.footprint_for(tool, x, y)
+                if tool in CITY_OBJECT_DEFS or tool in ("house", "mine")
+                else (
+                    self.footprint_for(self.city_object_at(x, y)[1], *self.city_object_at(x, y)[0])
+                    if tool == "demolish" and self.city_object_at(x, y) is not None
+                    else {target}
+                )
+            )
+            path = self.find_worker_path_to_action_target(target, footprint)
 
         if path is None:
             self.work_queue.pop(0)
@@ -1444,9 +1518,7 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             action = "chop" if (x, y) in self.trees else "mine"
-        elif tool == "demolish":
-            action = "mine"
-        elif tool == "dig":
+        elif tool in ("demolish", "dig"):
             action = "mine"
         else:
             action = "build"
@@ -1702,7 +1774,7 @@ class CityGame:
                     if (tool == "clear" and type(x) is int and type(y) is int
                             and ((x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines)):
                         tool = "demolish"
-                    if (tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore")
+                    if (tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore", *CITY_OBJECT_DEFS.keys())
                             or type(x) is not int or type(y) is not int
                             or not (0 <= x < MAP_W and 0 <= y < MAP_H)
                             or not self.is_unlocked(x, y)):
@@ -1711,7 +1783,7 @@ class CityGame:
                         continue
                     if tool == "clear" and (x, y) not in self.trees and (x, y) not in self.rocks:
                         continue
-                    if tool == "demolish" and (x, y) not in self.roads and (x, y) not in self.houses and (x, y) not in self.mines:
+                    if tool == "demolish" and (x, y) not in self.roads and self.city_object_at(x, y) is None:
                         continue
                     if tool == "dig" and not self.can_dig_terrain(x, y):
                         continue
@@ -1724,6 +1796,9 @@ class CityGame:
                     if tool == "house" and not self.has_planned_adjacent_road(x, y):
                         continue
                     if tool == "mine" and not self.can_build_mine_on(x, y, allow_worker=True):
+                        continue
+                    if tool in CITY_OBJECT_DEFS and not self.can_build_city_object(
+                            tool, x, y, allow_worker=True):
                         continue
                     if tool == "restore" and not self.can_restore_terrain(x, y, allow_worker=True):
                         continue
