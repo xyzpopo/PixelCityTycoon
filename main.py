@@ -95,7 +95,7 @@ C = {
 }
 
 TOOL_NAMES = [
-    "F1 이동", "F2 자연", "F3 도로", "F4 집",
+    "F1 이동", "F2 자연", "F3 도로", "F4 건설",
     "F6 굴착", "F7 채굴", "F8 복원", "F10 인공"
 ]
 TOOL_KEYS = [
@@ -106,11 +106,46 @@ TOOL_HINTS = {
     "clear": "자연 제거: 나무·바위만 제거 · 목재/석재 획득",
     "demolish": "인공 철거: 도로·다리·주택·채굴장 제거",
     "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
-    "house": "집: 도로 옆 건설 · ₩3,000 + 목재 1 + 석재 1",
+    "house": "건설: [ ] 종류 변경 · 기존 건물 선택 후 G 업그레이드",
     "dig": "굴착: 산을 한 층 낮추고 석재 획득",
     "mine": "채굴장: 도로 옆 설치 · 지층별 6시간 자동 채굴",
     "restore": "지형 복원: 빈 땅을 한 층 높임 · 석재 2",
 }
+
+CITY_OBJECT_DEFS = {
+    "commercial": {
+        "label": "상업 건물", "w": 2, "h": 2,
+        "money": 8500, "wood": 3, "stone": 2,
+        "road": True, "jobs": 8, "income": 120, "maintenance": 20,
+    },
+    "industrial": {
+        "label": "공업 건물", "w": 3, "h": 2,
+        "money": 12000, "wood": 5, "stone": 4,
+        "road": True, "jobs": 12, "income": 180, "maintenance": 40,
+    },
+    "public": {
+        "label": "공공시설", "w": 2, "h": 2,
+        "money": 9500, "wood": 3, "stone": 4,
+        "road": True, "jobs": 4, "income": 0, "maintenance": 45,
+    },
+    "park": {
+        "label": "공원", "w": 2, "h": 2,
+        "money": 2500, "wood": 2, "stone": 1,
+        "road": True, "jobs": 0, "income": 0, "maintenance": 5,
+    },
+    "lamp": {
+        "label": "가로등", "w": 1, "h": 1,
+        "money": 500, "wood": 1, "stone": 0,
+        "road": True, "jobs": 0, "income": 0, "maintenance": 2,
+    },
+    "decor_tree": {
+        "label": "조경수", "w": 1, "h": 1,
+        "money": 350, "wood": 1, "stone": 0,
+        "road": False, "jobs": 0, "income": 0, "maintenance": 0,
+    },
+}
+BUILDING_CYCLE = ["house", "commercial", "industrial", "public", "park", "lamp", "decor_tree"]
+UPGRADABLE_OBJECTS = {"house", "commercial", "industrial", "public"}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -159,6 +194,11 @@ class CityGame:
         self.underground_layer = 1
         self.underground_mined: Set[Tuple[int, int, int]] = set()
         self.houses: Set[Tuple[int, int]] = set()
+        self.house_levels: Dict[Tuple[int, int], int] = {}
+        # New multi-tile buildings and decorative facilities keyed by top-left anchor.
+        self.city_objects: Dict[Tuple[int, int], Dict[str, int]] = {}
+        self.selected_building_type = "house"
+        self.selected_structure_anchor: Optional[Tuple[int, int]] = None
         # (x, y) -> (current stratum 1..4, elapsed in-game minutes in that stratum).
         # Layer 4 means the three available strata have been exhausted.
         self.mines: Dict[Tuple[int, int], Tuple[int, float]] = {}
@@ -363,6 +403,10 @@ class CityGame:
         self.tool_drag_moved = False
         self.tool_drag_visited.clear()
         self.houses.clear()
+        self.house_levels.clear()
+        self.city_objects.clear()
+        self.selected_building_type = "house"
+        self.selected_structure_anchor = None
         self.expand_level = 0
         self.money = 100000
         self.population = 0
@@ -524,7 +568,7 @@ class CityGame:
         self.notify(f"지도 회전: {self.map_rotation * 90}도", 1.8)
 
     def unlocked_bounds(self) -> Tuple[int, int, int, int]:
-        radii = [6, 10, 14, 18]
+        radii = [6, 10, 14, 18, 22]
         radius = radii[min(self.expand_level, len(radii) - 1)]
         cx, cy = MAP_W // 2, MAP_H // 2
         return cx - radius, cy - radius, cx + radius, cy + radius
@@ -632,7 +676,8 @@ class CityGame:
         ):
             return False
         if ((x, y) in self.trees or (x, y) in self.rocks
-                or (x, y) in self.houses or (x, y) in self.mines):
+                or (x, y) in self.houses or (x, y) in self.mines
+                or self.is_city_object_occupied(x, y)):
             return False
         return True
 
@@ -733,6 +778,92 @@ class CityGame:
         if not self.worker_path:
             self.worker_move_progress = 0.0
 
+    def footprint_for(self, kind: str, x: int, y: int) -> Set[Tuple[int, int]]:
+        """Return every tile occupied by a building/facility footprint."""
+        if kind == "house" or kind == "mine":
+            width, height = 1, 1
+        else:
+            spec = CITY_OBJECT_DEFS.get(kind)
+            if spec is None:
+                return set()
+            width, height = spec["w"], spec["h"]
+        return {
+            (x + dx, y + dy)
+            for dx in range(width)
+            for dy in range(height)
+        }
+
+    def city_object_at(
+        self, x: int, y: int
+    ) -> Optional[Tuple[Tuple[int, int], str, int]]:
+        """Find the anchor and type when a clicked tile belongs to a city object."""
+        pos = (x, y)
+        if pos in self.houses:
+            return pos, "house", self.house_levels.get(pos, 1)
+        if pos in self.mines:
+            return pos, "mine", 1
+        for anchor, data in self.city_objects.items():
+            kind = data.get("type")
+            if kind in CITY_OBJECT_DEFS and pos in self.footprint_for(kind, *anchor):
+                return anchor, kind, max(1, int(data.get("level", 1)))
+        return None
+
+    def is_city_object_occupied(self, x: int, y: int) -> bool:
+        return self.city_object_at(x, y) is not None
+
+    def footprint_has_road(self, footprint: Set[Tuple[int, int]]) -> bool:
+        """Check all footprint edges for built or already planned road access."""
+        for tx, ty in footprint:
+            if self.has_adjacent_road(tx, ty):
+                return True
+            if any(
+                tool == "road" and abs(rx - tx) + abs(ry - ty) == 1
+                for tool, rx, ry in self.work_queue
+            ):
+                return True
+        return False
+
+    def can_build_city_object(
+        self, kind: str, x: int, y: int, allow_worker: bool = False,
+        ignore_order: Optional[Tuple[str, int, int]] = None,
+    ) -> bool:
+        """Validate an entire multi-tile footprint, not just its anchor tile."""
+        spec = CITY_OBJECT_DEFS.get(kind)
+        if spec is None:
+            return False
+        footprint = self.footprint_for(kind, x, y)
+        if not footprint:
+            return False
+        heights: Set[int] = set()
+        for tx, ty in footprint:
+            if not (0 <= tx < MAP_W and 0 <= ty < MAP_H) or not self.is_unlocked(tx, ty):
+                return False
+            tile = self.terrain[tx][ty]
+            if tile.terrain != "grass":
+                return False
+            heights.add(tile.height)
+            if ((tx, ty) in self.trees or (tx, ty) in self.rocks
+                    or (tx, ty) in self.roads or (tx, ty) in self.houses
+                    or (tx, ty) in self.mines or self.is_city_object_occupied(tx, ty)):
+                return False
+            if (tx, ty) == (self.worker_x, self.worker_y) and not allow_worker:
+                return False
+        # Large buildings need a level foundation.
+        if len(heights) > 1:
+            return False
+
+        # Prevent two planned structures from reserving overlapping ground.
+        for queued_tool, qx, qy in self.work_queue:
+            if ignore_order == (queued_tool, qx, qy):
+                continue
+            if queued_tool == "house" or queued_tool in CITY_OBJECT_DEFS:
+                if footprint & self.footprint_for(queued_tool, qx, qy):
+                    return False
+
+        if spec["road"] and not self.footprint_has_road(footprint):
+            return False
+        return True
+
     def can_build_on(self, x: int, y: int, allow_worker: bool = False) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
@@ -741,6 +872,8 @@ class CityGame:
         if (x, y) in self.trees or (x, y) in self.rocks:
             return False
         if (x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines:
+            return False
+        if self.is_city_object_occupied(x, y):
             return False
         if (x, y) == (self.worker_x, self.worker_y) and not allow_worker:
             return False
@@ -766,7 +899,7 @@ class CityGame:
             return False
         if ((x, y) in self.trees or (x, y) in self.rocks
                 or (x, y) in self.roads or (x, y) in self.houses
-                or (x, y) in self.mines):
+                or (x, y) in self.mines or self.is_city_object_occupied(x, y)):
             return False
         if (x, y) == (self.worker_x, self.worker_y) and not allow_worker:
             return False
@@ -778,7 +911,7 @@ class CityGame:
             return False
         if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.roads:
             return False
-        if (x, y) in self.houses or (x, y) in self.mines:
+        if (x, y) in self.houses or (x, y) in self.mines or self.is_city_object_occupied(x, y):
             return False
         if self.terrain[x][y].terrain == "water":
             return self.has_planned_adjacent_road(x, y)
@@ -798,6 +931,8 @@ class CityGame:
                 and self.terrain[x][y].height <= 0):
             return False
         if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.roads or (x, y) in self.houses:
+            return False
+        if (x, y) in self.mines or self.is_city_object_occupied(x, y):
             return False
         return True
 
@@ -822,35 +957,33 @@ class CityGame:
         y_links = int((x, y - 1) in self.roads) + int((x, y + 1) in self.roads)
         return "y" if y_links > x_links else "x"
 
+    def order_costs(self, tool: str, x: int, y: int) -> Tuple[int, int, int]:
+        """Return reserved money/wood/stone costs for any construction order."""
+        if tool == "road":
+            return self.road_build_cost(x, y)
+        if tool == "house":
+            return HOUSE_MONEY_COST, HOUSE_WOOD_COST, HOUSE_STONE_COST
+        if tool == "mine":
+            return MINE_MONEY_COST, MINE_WOOD_COST, MINE_STONE_COST
+        spec = CITY_OBJECT_DEFS.get(tool)
+        if spec:
+            return spec["money"], spec["wood"], spec["stone"]
+        if tool == "restore":
+            return 0, 0, TERRAIN_RESTORE_STONE_COST
+        return 0, 0, 0
+
     def reserved_build_cost(self) -> int:
         """Money already committed to queued construction orders."""
-        total = 0
-        for tool, x, y in self.work_queue:
-            if tool == "road":
-                total += self.road_build_cost(x, y)[0]
-            elif tool == "house":
-                total += HOUSE_MONEY_COST
-            elif tool == "mine":
-                total += MINE_MONEY_COST
-        return total
+        return sum(self.order_costs(tool, x, y)[0] for tool, x, y in self.work_queue)
 
     def reserved_material_costs(self) -> Tuple[int, int]:
         """Wood and stone already committed to queued construction/terraforming."""
         reserved_wood = 0
         reserved_stone = 0
         for tool, x, y in self.work_queue:
-            if tool == "road":
-                _, wood_cost, stone_cost = self.road_build_cost(x, y)
-                reserved_wood += wood_cost
-                reserved_stone += stone_cost
-            elif tool == "house":
-                reserved_wood += HOUSE_WOOD_COST
-                reserved_stone += HOUSE_STONE_COST
-            elif tool == "mine":
-                reserved_wood += MINE_WOOD_COST
-                reserved_stone += MINE_STONE_COST
-            elif tool == "restore":
-                reserved_stone += TERRAIN_RESTORE_STONE_COST
+            _money, wood_cost, stone_cost = self.order_costs(tool, x, y)
+            reserved_wood += wood_cost
+            reserved_stone += stone_cost
         return reserved_wood, reserved_stone
 
     def has_planned_adjacent_road(self, x: int, y: int) -> bool:
@@ -1373,9 +1506,9 @@ class CityGame:
             self.notify("튜토리얼 완료! 이제 자유롭게 도시를 만들어 보세요.", 6)
 
     def expand_land(self) -> None:
-        costs = [5000, 15000, 35000]
-        if self.expand_level >= 3:
-            self.notify("현재 프로토타입에서 확장할 수 있는 최대 크기예요.")
+        costs = [5000, 15000, 35000, 75000]
+        if self.expand_level >= len(costs):
+            self.notify("지도 전체를 개척했어요. 더 이상 확장할 땅이 없어요.", 2.8)
             return
         cost = costs[self.expand_level]
         if self.money - self.reserved_build_cost() < cost:
@@ -1383,14 +1516,14 @@ class CityGame:
             return
         self.money -= cost
         self.expand_level += 1
-        self.notify(f"새로운 땅을 개척했어요! -₩{cost:,}", 3)
+        radius = [10, 14, 18, 22][self.expand_level - 1]
+        self.notify(
+            f"도시 영역 확장 완료 · 반경 {radius}타일 · -₩{cost:,}", 3
+        )
 
-    # ------------------------------------------------------------------
-    # Save / load
-    # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 10,
+            "version": 11,
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
             "mine_sites": [
@@ -1413,6 +1546,13 @@ class CityGame:
                 for x in range(MAP_W)
             ],
             "houses": [list(p) for p in sorted(self.houses)],
+            "house_levels": [
+                [x, y, level] for (x, y), level in sorted(self.house_levels.items())
+            ],
+            "city_objects": [
+                [x, y, data.get("type"), data.get("level", 1)]
+                for (x, y), data in sorted(self.city_objects.items())
+            ],
             "expand_level": self.expand_level,
             "money": self.money,
             "population": self.population,
@@ -1485,6 +1625,16 @@ class CityGame:
                             and entry[2] in ("x", "y")):
                         self.road_directions[(entry[0], entry[1])] = entry[2]
             self.houses = {tuple(p) for p in data.get("houses", [])}
+            self.house_levels = {}
+            saved_house_levels = data.get("house_levels", [])
+            if isinstance(saved_house_levels, list):
+                for entry in saved_house_levels:
+                    if (isinstance(entry, list) and len(entry) == 3
+                            and type(entry[0]) is int and type(entry[1]) is int
+                            and type(entry[2]) is int and 0 <= entry[2] <= 3
+                            and (entry[0], entry[1]) in self.houses):
+                        self.house_levels[(entry[0], entry[1])] = max(1, entry[2])
+            self.city_objects = {}
             self.mines = {}
             saved_mines = data.get("mine_sites", [])
             if isinstance(saved_mines, list):
@@ -1503,7 +1653,19 @@ class CityGame:
                             and pos not in self.roads and pos not in self.houses
                             and pos not in self.trees and pos not in self.rocks):
                         self.mines[pos] = (entry[2], float(entry[3]))
-            self.expand_level = int(data.get("expand_level", 0))
+            self.expand_level = int(clamp(int(data.get("expand_level", 0)), 0, 4))
+            saved_city_objects = data.get("city_objects", [])
+            if isinstance(saved_city_objects, list):
+                for entry in saved_city_objects:
+                    if (not isinstance(entry, list) or len(entry) != 4
+                            or type(entry[0]) is not int or type(entry[1]) is not int
+                            or entry[2] not in CITY_OBJECT_DEFS or type(entry[3]) is not int):
+                        continue
+                    x, y, kind, level = entry
+                    if self.can_build_city_object(kind, x, y):
+                        self.city_objects[(x, y)] = {
+                            "type": kind, "level": int(clamp(level, 1, 3))
+                        }
             self.money = int(data.get("money", 100000))
             self.population = int(data.get("population", 0))
             self.wood = int(data.get("wood", 0))
