@@ -143,6 +143,7 @@ class CityGame:
         self.camera_follow_worker = False
         self.underground_view = False
         self.underground_layer = 1
+        self.underground_mined: Set[Tuple[int, int, int]] = set()
         self.houses: Set[Tuple[int, int]] = set()
         self.expand_level = 0
         self.money = 100000
@@ -337,6 +338,7 @@ class CityGame:
         self.camera_follow_worker = False
         self.underground_view = False
         self.underground_layer = 1
+        self.underground_mined.clear()
         self.tool_dragging = False
         self.tool_drag_start_tile = None
         self.tool_drag_last_tile = None
@@ -808,9 +810,45 @@ class CityGame:
             for tool, rx, ry in self.work_queue
         )
 
+    def underground_vein_amount(self, x: int, y: int, layer: int) -> int:
+        """Return the seed-stable stone deposit size for an underground stratum."""
+        if not (0 <= x < MAP_W and 0 <= y < MAP_H and 1 <= layer <= 3):
+            return 0
+        roll = (self.seed * 31 + x * 73 + y * 47 + layer * 109) % 53
+        if roll < 2:
+            return 8
+        if roll < 5:
+            return 4
+        return 0
+
+    def can_mine_underground_vein(self, x: int, y: int, layer: int) -> bool:
+        return (
+            self.is_unlocked(x, y)
+            and (layer, x, y) not in self.underground_mined
+            and self.underground_vein_amount(x, y, layer) > 0
+        )
+
+    def mine_underground_vein(self, x: int, y: int, layer: int) -> bool:
+        if not self.can_mine_underground_vein(x, y, layer):
+            self.notify("이 지층에는 채굴할 광맥이 없거나 이미 채굴했어요.", 2.2)
+            return False
+        amount = self.underground_vein_amount(x, y, layer)
+        self.underground_mined.add((layer, x, y))
+        self.stone += amount
+        self.notify(f"지하 {layer}층 광맥 채굴 완료 · 석재 +{amount}", 3)
+        return True
+
     def can_reserve_work_order(self, tool: str, x: int, y: int) -> Tuple[bool, str]:
         if not self.is_unlocked(x, y):
             return False, "아직 개척하지 않은 땅이에요. 먼저 땅을 확장하세요."
+        if tool.startswith("vein"):
+            try:
+                layer = int(tool[4:])
+            except ValueError:
+                return False, "잘못된 지하 채굴 작업이에요."
+            if not self.can_mine_underground_vein(x, y, layer):
+                return False, "이 타일에는 채굴할 광맥이 없거나 이미 채굴했어요."
+            return True, ""
         if tool == "clear":
             if (x, y) not in self.trees and (x, y) not in self.rocks:
                 return False, "제거 예약은 나무나 바위에만 할 수 있어요."
@@ -850,8 +888,8 @@ class CityGame:
         return True, ""
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
-        """Queue or cancel a clear, road, house, or terrain-dig action."""
-        if tool not in ("clear", "road", "house", "dig"):
+        """Queue or cancel a clear, build, surface-dig, or underground-mine action."""
+        if tool not in ("clear", "road", "house", "dig", "vein1", "vein2", "vein3"):
             return
 
         existing_index = next(
@@ -896,7 +934,9 @@ class CityGame:
             self.road_directions[(x, y)] = self.infer_road_axis(x, y)
         labels = {
             "clear": "제거", "road": "도로 건설",
-            "house": "주택 건설", "dig": "지형 굴착"
+            "house": "주택 건설", "dig": "지형 굴착",
+            "vein1": "지하 1층 채굴", "vein2": "지하 2층 채굴",
+            "vein3": "지하 3층 채굴",
         }
         self.notify(
             f"{labels[tool]} 예약 {len(self.work_queue)}개 · 클릭한 순서대로 작업합니다.",
@@ -1086,6 +1126,8 @@ class CityGame:
                          and self.has_planned_adjacent_road(x, y))
             elif tool == "dig":
                 valid = self.can_dig_terrain(x, y)
+            elif tool.startswith("vein"):
+                valid = self.can_mine_underground_vein(x, y, int(tool[4:]))
             else:
                 valid = False
             if valid:
@@ -1103,7 +1145,7 @@ class CityGame:
 
         tool, x, y = self.work_queue[0]
         target = (x, y)
-        if tool in ("clear", "dig"):
+        if tool in ("clear", "dig") or tool.startswith("vein"):
             path = self.find_worker_path_to_work_target(target)
         else:
             path = self.find_worker_path_to_action_target(target)
@@ -1127,7 +1169,7 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             action = "chop" if (x, y) in self.trees else "mine"
-        elif tool == "dig":
+        elif tool == "dig" or tool.startswith("vein"):
             action = "mine"
         else:
             action = "build"
@@ -1151,6 +1193,8 @@ class CityGame:
             self.remove_resource_at(x, y, start_animation=False)
         elif tool == "dig":
             self.dig_terrain_at(x, y)
+        elif tool.startswith("vein"):
+            self.mine_underground_vein(x, y, int(tool[4:]))
         else:
             built = self.perform_build_order(tool, x, y, start_animation=False)
             if not built and tool == "road":
@@ -1200,8 +1244,9 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 8,
+            "version": 9,
             "seed": self.seed,
+            "underground_mined": [list(p) for p in sorted(self.underground_mined)],
             "map_rotation": self.map_rotation,
             "camera_follow_worker": self.camera_follow_worker,
             "underground_view": self.underground_view,
@@ -1252,6 +1297,15 @@ class CityGame:
             self.underground_view = bool(data.get("underground_view", False))
             saved_layer = data.get("underground_layer", 1)
             self.underground_layer = int(clamp(saved_layer, 1, 3)) if type(saved_layer) is int else 1
+            self.underground_mined = set()
+            saved_mined = data.get("underground_mined", [])
+            if isinstance(saved_mined, list):
+                for entry in saved_mined:
+                    if (isinstance(entry, list) and len(entry) == 3
+                            and all(type(value) is int for value in entry)
+                            and 1 <= entry[0] <= 3
+                            and 0 <= entry[1] < MAP_W and 0 <= entry[2] < MAP_H):
+                        self.underground_mined.add(tuple(entry))
             saved_heights = data.get("terrain_heights")
             if isinstance(saved_heights, list) and len(saved_heights) == MAP_W:
                 for x, column in enumerate(saved_heights):
@@ -1315,7 +1369,7 @@ class CityGame:
                         continue
                     tool = order.get("tool")
                     x, y = order.get("x"), order.get("y")
-                    if (tool not in ("clear", "road", "house", "dig")
+                    if (tool not in ("clear", "road", "house", "dig", "vein1", "vein2", "vein3")
                             or type(x) is not int or type(y) is not int
                             or not (0 <= x < MAP_W and 0 <= y < MAP_H)
                             or not self.is_unlocked(x, y)):
@@ -1325,6 +1379,8 @@ class CityGame:
                     if tool == "clear" and (x, y) not in self.trees and (x, y) not in self.rocks:
                         continue
                     if tool == "dig" and not self.can_dig_terrain(x, y):
+                        continue
+                    if tool.startswith("vein") and not self.can_mine_underground_vein(x, y, int(tool[4:])):
                         continue
                     if tool == "road" and not self.can_build_road_on(x, y):
                         continue
@@ -1458,9 +1514,12 @@ class CityGame:
         pygame.draw.polygon(self.canvas, (48, 56, 61), points, 1)
 
         # Seed-based survey marks reveal occasional mineral veins in this slice.
-        ore_roll = (self.seed * 31 + x * 73 + y * 47 + layer * 109) % 53
-        if ore_roll < 4 and self.zoom >= 0.82:
-            ore_color = (199, 177, 103) if ore_roll in (0, 1) else (145, 164, 171)
+        amount = self.underground_vein_amount(x, y, layer)
+        mined = (layer, x, y) in self.underground_mined
+        if amount > 0 and self.zoom >= 0.82:
+            ore_color = (72, 76, 73) if mined else (
+                (199, 177, 103) if amount >= 8 else (145, 164, 171)
+            )
             ore_x = round(cx + ((x * 5 + y * 3) % 7 - 3) * self.zoom)
             ore_y = round(cy + ((x * 2 + y * 7) % 5 - 2) * self.zoom)
             pygame.draw.rect(
@@ -1468,6 +1527,12 @@ class CityGame:
                 (ore_x, ore_y, max(2, round(3 * self.zoom)),
                  max(1, round(2 * self.zoom)))
             )
+            if not mined:
+                pygame.draw.rect(
+                    self.canvas, (225, 211, 166),
+                    (ore_x + max(1, round(self.zoom)), ore_y,
+                     max(1, round(self.zoom)), max(1, round(self.zoom)))
+                )
 
     def draw_elevation_cliff_faces(
         self, x: int, y: int, worker_gx: float, worker_gy: float
@@ -2159,6 +2224,9 @@ class CityGame:
             "road": (190, 198, 190),
             "house": (238, 151, 111),
             "dig": (147, 158, 166),
+            "vein1": (187, 168, 114),
+            "vein2": (157, 168, 179),
+            "vein3": (126, 147, 176),
         }
         for index, (tool, x, y) in enumerate(self.work_queue, start=1):
             if not self.is_unlocked(x, y):
@@ -2358,6 +2426,8 @@ class CityGame:
             self.selected_road_tile = None
         if self.tool == "move":
             self.set_worker_destination(x, y)
+        elif self.underground_view and self.tool == "dig":
+            self.toggle_work_order(f"vein{self.underground_layer}", x, y)
         else:
             self.toggle_work_order(self.tool, x, y)
 
@@ -2367,11 +2437,12 @@ class CityGame:
             return
         if len(self.work_queue) >= MAX_WORK_QUEUE:
             return
-        valid, _reason = self.can_reserve_work_order(tool, x, y)
+        order_tool = f"vein{self.underground_layer}" if self.underground_view and tool == "dig" else tool
+        valid, _reason = self.can_reserve_work_order(order_tool, x, y)
         if not valid:
             return
-        self.work_queue.append((tool, x, y))
-        if tool == "road":
+        self.work_queue.append((order_tool, x, y))
+        if order_tool == "road":
             self.road_directions[(x, y)] = self.infer_road_axis(x, y)
 
     def paint_drag_segment(
