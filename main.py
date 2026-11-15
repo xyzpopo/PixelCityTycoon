@@ -143,8 +143,29 @@ CITY_OBJECT_DEFS = {
         "money": 350, "wood": 1, "stone": 0,
         "road": False, "jobs": 0, "income": 0, "maintenance": 0,
     },
+    "logging": {
+        "label": "벌목장", "w": 2, "h": 2,
+        "money": 7000, "wood": 3, "stone": 2,
+        "road": True, "jobs": 6, "income": 0, "maintenance": 18,
+    },
 }
-BUILDING_CYCLE = ["house", "commercial", "industrial", "public", "park", "lamp", "decor_tree"]
+BUILDING_CYCLE = [
+    "house", "commercial", "industrial", "public", "park",
+    "lamp", "decor_tree", "mine", "logging"
+]
+BUILD_MENU_ITEMS = [
+    ("house", "집", "1×1"),
+    ("commercial", "상가", "2×2"),
+    ("industrial", "공장", "3×2"),
+    ("public", "공공", "2×2"),
+    ("park", "공원", "2×2"),
+    ("lamp", "가로등", "1×1"),
+    ("decor_tree", "조경수", "1×1"),
+    ("mine", "채굴장", "1×1"),
+    ("logging", "벌목장", "2×2"),
+]
+LUMBER_CAMP_DURATION_MINUTES = 6 * 60
+LUMBER_CAMP_WOOD_PER_CYCLE = 4
 UPGRADABLE_OBJECTS = {"house", "commercial", "industrial", "public"}
 
 
@@ -196,9 +217,15 @@ class CityGame:
         self.houses: Set[Tuple[int, int]] = set()
         self.house_levels: Dict[Tuple[int, int], int] = {}
         # New multi-tile buildings and decorative facilities keyed by top-left anchor.
-        self.city_objects: Dict[Tuple[int, int], Dict[str, int]] = {}
+        self.city_objects: Dict[Tuple[int, int], Dict[str, object]] = {}
+        self.logging_progress: Dict[Tuple[int, int], float] = {}
         self.selected_building_type = "house"
         self.selected_structure_anchor: Optional[Tuple[int, int]] = None
+        self.build_palette_open = False
+        self.build_palette_anchor: Optional[Tuple[int, int]] = None
+        self.build_palette_dragging = False
+        self.build_palette_hover_index: Optional[int] = None
+        self.build_palette_pressed_index: Optional[int] = None
         # (x, y) -> (current stratum 1..4, elapsed in-game minutes in that stratum).
         # Layer 4 means the three available strata have been exhausted.
         self.mines: Dict[Tuple[int, int], Tuple[int, float]] = {}
@@ -405,8 +432,14 @@ class CityGame:
         self.houses.clear()
         self.house_levels.clear()
         self.city_objects.clear()
+        self.logging_progress.clear()
         self.selected_building_type = "house"
         self.selected_structure_anchor = None
+        self.build_palette_open = False
+        self.build_palette_anchor = None
+        self.build_palette_dragging = False
+        self.build_palette_hover_index = None
+        self.build_palette_pressed_index = None
         self.expand_level = 0
         self.money = 100000
         self.population = 0
@@ -856,12 +889,19 @@ class CityGame:
         for queued_tool, qx, qy in self.work_queue:
             if ignore_order == (queued_tool, qx, qy):
                 continue
-            if queued_tool == "house" or queued_tool in CITY_OBJECT_DEFS:
+            if queued_tool in ("house", "mine") or queued_tool in CITY_OBJECT_DEFS:
                 if footprint & self.footprint_for(queued_tool, qx, qy):
                     return False
 
         if spec["road"] and not self.footprint_has_road(footprint):
             return False
+        if kind == "logging":
+            nearby_trees = {
+                tree for tree in self.trees
+                if min(abs(tree[0] - tx) + abs(tree[1] - ty) for tx, ty in footprint) <= 5
+            }
+            if not nearby_trees:
+                return False
         return True
 
     def cycle_building_type(self, direction: int) -> None:
@@ -1301,6 +1341,7 @@ class CityGame:
                 self.notify("채굴장을 철거했어요. 진행 중이던 채굴은 중단됐어요.")
             elif anchor in self.city_objects:
                 del self.city_objects[anchor]
+                self.logging_progress.pop(anchor, None)
                 if self.selected_structure_anchor == anchor:
                     self.selected_structure_anchor = None
                 name = CITY_OBJECT_DEFS[kind]["label"]
@@ -1433,6 +1474,8 @@ class CityGame:
             self.wood -= wood_cost
             self.stone -= stone_cost
             self.city_objects[(x, y)] = {"type": tool, "level": 1}
+            if tool == "logging":
+                self.logging_progress[(x, y)] = 0.0
             if start_animation:
                 self.start_worker_action("build", x, y)
             self.notify(
@@ -1595,7 +1638,7 @@ class CityGame:
 
     def save_game(self) -> None:
         data = {
-            "version": 11,
+            "version": 12,
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
             "mine_sites": [
@@ -1624,6 +1667,9 @@ class CityGame:
             "city_objects": [
                 [x, y, data.get("type"), data.get("level", 1)]
                 for (x, y), data in sorted(self.city_objects.items())
+            ],
+            "logging_progress": [
+                [x, y, progress] for (x, y), progress in sorted(self.logging_progress.items())
             ],
             "expand_level": self.expand_level,
             "money": self.money,
@@ -1738,6 +1784,20 @@ class CityGame:
                         self.city_objects[(x, y)] = {
                             "type": kind, "level": int(clamp(level, 1, 3))
                         }
+            self.logging_progress = {}
+            saved_logging_progress = data.get("logging_progress", [])
+            if isinstance(saved_logging_progress, list):
+                for entry in saved_logging_progress:
+                    if (isinstance(entry, list) and len(entry) == 3
+                            and type(entry[0]) is int and type(entry[1]) is int
+                            and isinstance(entry[2], (int, float)) and not isinstance(entry[2], bool)
+                            and (entry[0], entry[1]) in self.city_objects
+                            and self.city_objects[(entry[0], entry[1])].get("type") == "logging"
+                            and 0 <= entry[2] <= LUMBER_CAMP_DURATION_MINUTES):
+                        self.logging_progress[(entry[0], entry[1])] = float(entry[2])
+            for anchor, object_data in self.city_objects.items():
+                if object_data.get("type") == "logging":
+                    self.logging_progress.setdefault(anchor, 0.0)
             self.money = int(data.get("money", 100000))
             self.population = int(data.get("population", 0))
             self.wood = int(data.get("wood", 0))
@@ -2836,7 +2896,8 @@ class CityGame:
             self.tool == "road" and self.selected_road_tile is not None,
             small=True
         )
-        cost_text = "최대" if self.expand_level >= 3 else f"₩{[5000,15000,35000][self.expand_level]:,}"
+        expansion_costs = [5000, 15000, 35000, 75000]
+        cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
         self.button(pygame.Rect(434, 294, 80, 23), "땅 확장", small=True)
         self.text(self.canvas, cost_text, 474, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
@@ -2844,7 +2905,7 @@ class CityGame:
         self.text(self.canvas, hint, 10, 327, 8, C["text"])
         self.text(
             self.canvas,
-            "Q/E 지도 회전   C 카메라 추적   U 지층 조사   [ ] 층 선택",
+            "Q/E 지도 회전   C 추적   U 지층 조사   G 건물 업그레이드",
             10, 344, 8, C["muted"]
         )
 
@@ -3214,6 +3275,39 @@ class CityGame:
                 3.2
             )
 
+    def update_logging_camps(self, game_minutes_elapsed: float) -> None:
+        """Turn a nearby forest tree into stored wood at each completed work cycle."""
+        if game_minutes_elapsed <= 0:
+            return
+        produced = 0
+        for anchor, data in list(self.city_objects.items()):
+            if data.get("type") != "logging":
+                continue
+            progress = self.logging_progress.get(anchor, 0.0) + game_minutes_elapsed
+            footprint = self.footprint_for("logging", *anchor)
+            while progress >= LUMBER_CAMP_DURATION_MINUTES:
+                nearby = [
+                    tree for tree in self.trees
+                    if min(abs(tree[0] - tx) + abs(tree[1] - ty) for tx, ty in footprint) <= 5
+                ]
+                if not nearby:
+                    progress = LUMBER_CAMP_DURATION_MINUTES
+                    break
+                target = min(
+                    nearby,
+                    key=lambda tree: (
+                        min(abs(tree[0] - tx) + abs(tree[1] - ty) for tx, ty in footprint),
+                        tree[1], tree[0]
+                    )
+                )
+                self.trees.remove(target)
+                self.wood += LUMBER_CAMP_WOOD_PER_CYCLE
+                progress -= LUMBER_CAMP_DURATION_MINUTES
+                produced += LUMBER_CAMP_WOOD_PER_CYCLE
+            self.logging_progress[anchor] = progress
+        if produced:
+            self.notify(f"벌목장 생산 완료 · 목재 +{produced}", 3)
+
     def update(self, dt: float) -> None:
         self.update_worker(dt)
         if not self.modal_seed:
@@ -3257,6 +3351,7 @@ class CityGame:
         game_elapsed_minutes = elapsed * 6
         self.game_minutes += game_elapsed_minutes
         self.update_mines(game_elapsed_minutes)
+        self.update_logging_camps(game_elapsed_minutes)
         while self.game_minutes >= 24 * 60:
             self.game_minutes -= 24 * 60
             self.day += 1
