@@ -1331,7 +1331,7 @@ class CityGame:
                 max(1, round(self.zoom))
             )
             layer.set_clip(None)
-            self.canvas.blit(layer, (0, 0), bounds)
+            self.canvas.blit(layer, bounds.topleft, bounds)
 
     def draw_tree(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
