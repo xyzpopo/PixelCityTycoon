@@ -858,6 +858,15 @@ class CityGame:
                 return True
         return False
 
+    def queued_building_overlap(self, kind: str, x: int, y: int) -> bool:
+        """Prevent small buildings from being reserved inside a larger planned footprint."""
+        footprint = self.footprint_for(kind, x, y)
+        for queued_tool, qx, qy in self.work_queue:
+            if queued_tool in ("house", "mine") or queued_tool in CITY_OBJECT_DEFS:
+                if footprint & self.footprint_for(queued_tool, qx, qy):
+                    return True
+        return False
+
     def can_build_city_object(
         self, kind: str, x: int, y: int, allow_worker: bool = False,
         ignore_order: Optional[Tuple[str, int, int]] = None,
@@ -1256,11 +1265,15 @@ class CityGame:
         elif tool == "house":
             if not self.can_build_on(x, y, allow_worker=allow_worker):
                 return False, "주택은 비어 있는 잔디 타일에만 지을 수 있어요."
+            if self.queued_building_overlap("house", x, y):
+                return False, "다른 건설 예약이 이 칸을 사용하고 있어요."
             if not self.has_planned_adjacent_road(x, y):
                 return False, "주택은 이미 있는 도로나 먼저 예약한 도로 옆에 지어야 해요."
         elif tool == "mine":
             if not self.can_build_mine_on(x, y, allow_worker=allow_worker):
                 return False, "채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요."
+            if self.queued_building_overlap("mine", x, y):
+                return False, "다른 건설 예약이 이 칸을 사용하고 있어요."
         elif tool in CITY_OBJECT_DEFS:
             if not self.can_build_city_object(
                 tool, x, y, allow_worker=allow_worker
@@ -3519,6 +3532,9 @@ class CityGame:
                             self.build_palette_pressed_index = hit
                             self.build_palette_hover_index = hit
                             continue
+                        panel, _cells = self.build_palette_geometry()
+                        if panel.collidepoint(logical):
+                            continue
                         self.close_build_palette()
                     if VIEW_RECT.collidepoint(*logical):
                         if self.tool == "house" and not self.underground_view:
@@ -3629,6 +3645,32 @@ class CityGame:
         if produced:
             self.notify(f"벌목장 생산 완료 · 목재 +{produced}", 3)
 
+    def calculate_daily_city_finances(self) -> Tuple[int, int, int]:
+        """Return tax income, business income, and maintenance due for one game day."""
+        tax_income = self.population * DAILY_INCOME_PER_RESIDENT
+        business_income = 0
+        maintenance = 0
+        for (x, y) in self.houses:
+            maintenance += 5 * self.house_levels.get((x, y), 1)
+        for data in self.city_objects.values():
+            kind = data.get("type")
+            if kind not in CITY_OBJECT_DEFS:
+                continue
+            level = max(1, int(data.get("level", 1)))
+            spec = CITY_OBJECT_DEFS[kind]
+            business_income += int(spec["income"]) * level
+            maintenance += int(spec["maintenance"]) * level
+        return tax_income, business_income, maintenance
+
+    def available_city_jobs(self) -> int:
+        """Total job capacity provided by commercial, industrial and public buildings."""
+        jobs = 0
+        for data in self.city_objects.values():
+            kind = data.get("type")
+            if kind in CITY_OBJECT_DEFS:
+                jobs += int(CITY_OBJECT_DEFS[kind]["jobs"]) * max(1, int(data.get("level", 1)))
+        return jobs
+
     def update(self, dt: float) -> None:
         self.update_worker(dt)
         if not self.modal_seed:
@@ -3676,10 +3718,14 @@ class CityGame:
         while self.game_minutes >= 24 * 60:
             self.game_minutes -= 24 * 60
             self.day += 1
-            daily_income = self.population * DAILY_INCOME_PER_RESIDENT
-            if daily_income > 0:
-                self.money += daily_income
-                self.notify(f"DAY {self.day} · 주민 세금 수입 +₩{daily_income:,}", 2.4)
+            tax_income, business_income, maintenance = self.calculate_daily_city_finances()
+            net_income = tax_income + business_income - maintenance
+            self.money += net_income
+            self.notify(
+                f"DAY {self.day} · 세금 +₩{tax_income:,} · 사업 +₩{business_income:,} "
+                f"· 유지비 -₩{maintenance:,} · 순수익 {net_income:+,}원",
+                3.4
+            )
         # The first tutorial task is completed by giving the character a destination.
         if not self.tutorial_done and self.tutorial_step == 0 and self.worker_moved and not self.worker_path:
             self.tutorial_step = 1
