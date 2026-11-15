@@ -119,6 +119,8 @@ class CityGame:
         pygame.display.set_caption(APP_NAME + " - Prototype 0.1")
         self.window = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.canvas = pygame.Surface((LOGICAL_W, LOGICAL_H))
+        # Reuse the transparent cliff layer instead of allocating a new surface each frame.
+        self.cliff_layer = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         self.clock = pygame.time.Clock()
         self.running = True
 
@@ -1261,7 +1263,8 @@ class CityGame:
 
     def draw_elevation_cliffs(self) -> None:
         """Draw stepped cliff faces and fade nearby foreground walls around the worker."""
-        layer = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        layer = self.cliff_layer
+        layer.fill((0, 0, 0, 0))
         layer.set_clip(VIEW_RECT)
         tw, th = TILE_W * self.zoom, TILE_H * self.zoom
         worker_gx, worker_gy = self.worker_grid_position()
