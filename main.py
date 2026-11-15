@@ -47,6 +47,9 @@ HOUSE_MONEY_COST = 3000
 HOUSE_WOOD_COST = 1
 HOUSE_STONE_COST = 1
 DIG_STONE_REWARD = 3
+BRIDGE_MONEY_COST = 250
+BRIDGE_WOOD_COST = 2
+BRIDGE_STONE_COST = 1
 ELEVATION_STEP = 8
 CAMERA_SPEED = 210.0
 DAILY_INCOME_PER_RESIDENT = 25
@@ -90,7 +93,7 @@ TOOL_KEYS = ["move", "clear", "road", "house", "dig"]
 TOOL_HINTS = {
     "move": "이동: 빈 타일을 클릭해 작업자를 이동합니다.",
     "clear": "제거: 나무 +목재 2 · 바위 +석재 2",
-    "road": "도로: 드래그로 건설 · 설치된 도로 선택 후 R로 회전",
+    "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · 선택 후 R 회전",
     "house": "집: 도로 옆에 건설 · ₩3,000 + 목재 1 + 석재 1",
     "dig": "굴착: 산 타일을 평탄화하고 석재 3 획득",
 }
@@ -136,6 +139,10 @@ class CityGame:
         self.road_directions: Dict[Tuple[int, int], str] = {}
         self.road_direction = "x"  # Legacy default; road tiles infer direction from neighbors.
         self.selected_road_tile: Optional[Tuple[int, int]] = None
+        self.map_rotation = 0
+        self.camera_follow_worker = False
+        self.underground_view = False
+        self.underground_layer = 1
         self.houses: Set[Tuple[int, int]] = set()
         self.expand_level = 0
         self.money = 100000
@@ -326,6 +333,10 @@ class CityGame:
         self.road_directions.clear()
         self.road_direction = "x"
         self.selected_road_tile = None
+        self.map_rotation = 0
+        self.camera_follow_worker = False
+        self.underground_view = False
+        self.underground_layer = 1
         self.tool_dragging = False
         self.tool_drag_start_tile = None
         self.tool_drag_last_tile = None
@@ -475,12 +486,46 @@ class CityGame:
     # ------------------------------------------------------------------
     # Isometric transform and tile picking
     # ------------------------------------------------------------------
+    def rotate_grid_position(self, x: int, y: int) -> Tuple[int, int]:
+        """Map world tile coordinates into the currently rotated grid."""
+        rotation = self.map_rotation % 4
+        if rotation == 1:
+            return MAP_W - 1 - y, x
+        if rotation == 2:
+            return MAP_W - 1 - x, MAP_H - 1 - y
+        if rotation == 3:
+            return y, MAP_H - 1 - x
+        return x, y
+
+    def unrotate_grid_position(self, rx: int, ry: int) -> Tuple[int, int]:
+        """Convert rotated grid coordinates back to saved world coordinates."""
+        rotation = self.map_rotation % 4
+        if rotation == 1:
+            return ry, MAP_W - 1 - rx
+        if rotation == 2:
+            return MAP_W - 1 - rx, MAP_H - 1 - ry
+        if rotation == 3:
+            return MAP_H - 1 - ry, rx
+        return rx, ry
+
+    def rotate_grid_float(self, x: float, y: float) -> Tuple[float, float]:
+        """Rotate interpolated worker coordinates without rounding."""
+        rotation = self.map_rotation % 4
+        if rotation == 1:
+            return MAP_W - 1 - y, x
+        if rotation == 2:
+            return MAP_W - 1 - x, MAP_H - 1 - y
+        if rotation == 3:
+            return y, MAP_H - 1 - x
+        return x, y
+
     def tile_to_screen(self, x: int, y: int) -> Tuple[float, float]:
         tw = TILE_W * self.zoom
         th = TILE_H * self.zoom
+        rx, ry = self.rotate_grid_position(x, y)
         height = self.terrain[x][y].height if self.terrain else 0
-        return ((x - y) * tw / 2 + self.camera_x,
-                (x + y) * th / 2 + self.camera_y
+        return ((rx - ry) * tw / 2 + self.camera_x,
+                (rx + ry) * th / 2 + self.camera_y
                 - height * ELEVATION_STEP * self.zoom)
 
     def screen_to_tile(self, sx: float, sy: float) -> Optional[Tuple[int, int]]:
@@ -495,16 +540,21 @@ class CityGame:
         xf = (a + b) / 2
         yf = (b - a) / 2
         candidates = []
-        # Raised tile surfaces can overlap the grid position below them.
-        for x in range(math.floor(xf) - 6, math.floor(xf) + 7):
-            for y in range(math.floor(yf) - 6, math.floor(yf) + 7):
-                if 0 <= x < MAP_W and 0 <= y < MAP_H:
-                    cx, cy = self.tile_to_screen(x, y)
-                    nx = abs(sx - cx) / (tw / 2)
-                    ny = abs(sy - cy) / (th / 2)
-                    if nx + ny <= 1.03:
-                        candidates.append((-self.terrain[x][y].height, nx + ny,
-                                           -(x + y), x, y))
+        # Candidate search takes place in the rotated grid, then returns to
+        # the original saved tile coordinates.
+        for rx in range(math.floor(xf) - 6, math.floor(xf) + 7):
+            for ry in range(math.floor(yf) - 6, math.floor(yf) + 7):
+                if not (0 <= rx < MAP_W and 0 <= ry < MAP_H):
+                    continue
+                x, y = self.unrotate_grid_position(rx, ry)
+                if not (0 <= x < MAP_W and 0 <= y < MAP_H):
+                    continue
+                cx, cy = self.tile_to_screen(x, y)
+                nx = abs(sx - cx) / (tw / 2)
+                ny = abs(sy - cy) / (th / 2)
+                if nx + ny <= 1.03:
+                    candidates.append((-self.terrain[x][y].height, nx + ny,
+                                       -(rx + ry), x, y))
         if not candidates:
             return None
         candidates.sort()
@@ -515,10 +565,13 @@ class CityGame:
     # Building / economy
     # ------------------------------------------------------------------
     def worker_can_stand(self, x: int, y: int) -> bool:
-        """Return whether the worker can occupy a tile."""
+        """Return whether the worker can occupy land or a completed bridge tile."""
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
-        if self.terrain[x][y].terrain not in ("grass", "mountain"):
+        terrain = self.terrain[x][y].terrain
+        if terrain not in ("grass", "mountain") and not (
+            terrain == "water" and (x, y) in self.roads
+        ):
             return False
         if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.houses:
             return False
@@ -621,7 +674,7 @@ class CityGame:
         if not self.worker_path:
             self.worker_move_progress = 0.0
 
-    def can_build_on(self, x: int, y: int) -> bool:
+    def can_build_on(self, x: int, y: int, allow_worker: bool = False) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
         if self.terrain[x][y].terrain != "grass":
@@ -630,9 +683,27 @@ class CityGame:
             return False
         if (x, y) in self.roads or (x, y) in self.houses:
             return False
-        if (x, y) == (self.worker_x, self.worker_y):
+        if (x, y) == (self.worker_x, self.worker_y) and not allow_worker:
             return False
         return True
+
+    def can_build_road_on(self, x: int, y: int) -> bool:
+        """Allow a bridge segment to extend from an existing or queued road."""
+        if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
+            return False
+        if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.roads:
+            return False
+        if (x, y) in self.houses:
+            return False
+        if self.terrain[x][y].terrain == "water":
+            return self.has_planned_adjacent_road(x, y)
+        return self.can_build_on(x, y)
+
+    def road_build_cost(self, x: int, y: int) -> Tuple[int, int, int]:
+        """Return money, wood and stone costs for a road or a water bridge tile."""
+        if self.terrain[x][y].terrain == "water":
+            return BRIDGE_MONEY_COST, BRIDGE_WOOD_COST, BRIDGE_STONE_COST
+        return ROAD_MONEY_COST, ROAD_WOOD_COST, 0
 
     def can_dig_terrain(self, x: int, y: int) -> bool:
         """Only exposed, unlocked mountain tiles can be excavated."""
@@ -668,19 +739,26 @@ class CityGame:
 
     def reserved_build_cost(self) -> int:
         """Money already committed to queued road and house orders."""
-        return sum(ROAD_MONEY_COST if tool == "road" else HOUSE_MONEY_COST if tool == "house" else 0
-                   for tool, _x, _y in self.work_queue)
+        total = 0
+        for tool, x, y in self.work_queue:
+            if tool == "road":
+                total += self.road_build_cost(x, y)[0]
+            elif tool == "house":
+                total += HOUSE_MONEY_COST
+        return total
 
     def reserved_material_costs(self) -> Tuple[int, int]:
         """Wood and stone already committed to queued construction orders."""
-        reserved_wood = sum(
-            ROAD_WOOD_COST if tool == "road" else HOUSE_WOOD_COST if tool == "house" else 0
-            for tool, _x, _y in self.work_queue
-        )
-        reserved_stone = sum(
-            HOUSE_STONE_COST if tool == "house" else 0
-            for tool, _x, _y in self.work_queue
-        )
+        reserved_wood = 0
+        reserved_stone = 0
+        for tool, x, y in self.work_queue:
+            if tool == "road":
+                _, wood_cost, stone_cost = self.road_build_cost(x, y)
+                reserved_wood += wood_cost
+                reserved_stone += stone_cost
+            elif tool == "house":
+                reserved_wood += HOUSE_WOOD_COST
+                reserved_stone += HOUSE_STONE_COST
         return reserved_wood, reserved_stone
 
     def has_planned_adjacent_road(self, x: int, y: int) -> bool:
@@ -705,7 +783,10 @@ class CityGame:
             return True, ""
         if tool not in ("road", "house"):
             return False, "예약할 수 없는 작업 종류예요."
-        if not self.can_build_on(x, y):
+        if tool == "road":
+            if not self.can_build_road_on(x, y):
+                return False, "도로는 빈 땅 또는 기존 도로에서 이어지는 물 위에만 놓을 수 있어요."
+        elif not self.can_build_on(x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)):
             return False, "건설 예약은 비어 있는 잔디 타일에만 할 수 있어요."
 
         available_money = self.money - self.reserved_build_cost()
@@ -713,10 +794,11 @@ class CityGame:
         available_wood = self.wood - reserved_wood
         available_stone = self.stone - reserved_stone
         if tool == "road":
-            if available_money < ROAD_MONEY_COST:
-                return False, f"도로 건설 자금이 부족해요. 필요 자금: ₩{ROAD_MONEY_COST:,}"
-            if available_wood < ROAD_WOOD_COST:
-                return False, f"도로 건설에 목재 {ROAD_WOOD_COST}개가 필요해요."
+            money_cost, wood_cost, stone_cost = self.road_build_cost(x, y)
+            if available_money < money_cost:
+                return False, f"도로/다리 건설 자금이 부족해요. 필요 자금: ₩{money_cost:,}"
+            if available_wood < wood_cost or available_stone < stone_cost:
+                return False, f"다리에는 목재 {wood_cost}개와 석재 {stone_cost}개가 필요해요."
             return True, ""
 
         if not self.has_planned_adjacent_road(x, y):
@@ -902,25 +984,34 @@ class CityGame:
 
     def perform_build_order(self, tool: str, x: int, y: int, start_animation: bool = True) -> bool:
         """Apply a queued road or house construction after the worker arrives."""
-        if not self.can_build_on(x, y):
-            self.notify("예약한 건설 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
-            return False
         if tool == "road":
-            if self.money < ROAD_MONEY_COST or self.wood < ROAD_WOOD_COST:
-                self.notify("도로 건설에 필요한 자금 또는 목재가 부족해 예약을 건너뛰었어요.", 2.8)
+            if not self.can_build_road_on(x, y):
+                self.notify("예약한 도로 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
                 return False
-            self.money -= ROAD_MONEY_COST
-            self.wood -= ROAD_WOOD_COST
+            money_cost, wood_cost, stone_cost = self.road_build_cost(x, y)
+            if self.money < money_cost or self.wood < wood_cost or self.stone < stone_cost:
+                self.notify("도로 또는 다리 건설에 필요한 자원이 부족해 예약을 건너뛰었어요.", 2.8)
+                return False
+            self.money -= money_cost
+            self.wood -= wood_cost
+            self.stone -= stone_cost
             self.roads.add((x, y))
             self.road_directions.setdefault((x, y), self.infer_road_axis(x, y))
             if start_animation:
                 self.start_worker_action("build", x, y)
-            if not self.tutorial_done:
+            if not self.tutorial_done and self.terrain[x][y].terrain != "water":
                 self.tutorial_roads += 1
-            self.notify(f"도로를 건설했어요. -₩{ROAD_MONEY_COST:,} · 목재 -{ROAD_WOOD_COST}")
+            structure_name = "다리" if self.terrain[x][y].terrain == "water" else "도로"
+            self.notify(
+                f"{structure_name} 건설 완료 · -₩{money_cost:,} · 목재 -{wood_cost}"
+                + (f" · 석재 -{stone_cost}" if stone_cost else "")
+            )
             self.check_tutorial()
             return True
         if tool == "house":
+            if not self.can_build_on(x, y):
+                self.notify("예약한 주택 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
+                return False
             if not self.has_adjacent_road(x, y):
                 self.notify("예약한 집 옆에 도로가 없어 건설을 건너뛰었어요.", 2.8)
                 return False
@@ -951,9 +1042,10 @@ class CityGame:
             if tool == "clear":
                 valid = (x, y) in self.trees or (x, y) in self.rocks
             elif tool == "road":
-                valid = self.can_build_on(x, y)
+                valid = self.can_build_road_on(x, y)
             elif tool == "house":
-                valid = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
+                valid = (self.can_build_on(x, y, allow_worker=True)
+                         and self.has_planned_adjacent_road(x, y))
             elif tool == "dig":
                 valid = self.can_dig_terrain(x, y)
             else:
@@ -1186,7 +1278,9 @@ class CityGame:
                         continue
                     if tool == "dig" and not self.can_dig_terrain(x, y):
                         continue
-                    if tool in ("road", "house") and not self.can_build_on(x, y):
+                    if tool == "road" and not self.can_build_road_on(x, y):
+                        continue
+                    if tool == "house" and not self.can_build_on(x, y, allow_worker=True):
                         continue
                     if tool == "house" and not self.has_planned_adjacent_road(x, y):
                         continue
