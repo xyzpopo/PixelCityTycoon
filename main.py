@@ -1450,6 +1450,17 @@ class CityGame:
                 )
                 offset += dash_length + dash_gap
 
+        # The selected installed tile shows its stored orientation. Rotating
+        # it changes this marker while the road network keeps its square joins.
+        if self.selected_road_tile == (x, y):
+            axis_mark = "↘" if self.road_directions.get((x, y), "x") == "x" else "↙"
+            self.text(self.canvas, axis_mark, center[0], center[1], 8, C["white"], center=True)
+            selected_outline = self.diamond(cx, cy, tw, th)
+            pygame.draw.polygon(
+                self.canvas, C["gold"], selected_outline,
+                max(1, round(2 * z))
+            )
+
     def draw_house(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
         z = self.zoom
@@ -1701,7 +1712,6 @@ class CityGame:
         # The dark background makes the edge of the owned island easy to read.
         pygame.draw.rect(self.canvas, (28, 39, 55), VIEW_RECT)
 
-        wall_depth = max(4, round(8 * self.zoom))
         wall_color_a = (91, 63, 48)
         wall_color_b = (62, 47, 43)
 
@@ -1718,6 +1728,9 @@ class CityGame:
                     continue
 
                 self.draw_tile(x, y)
+                wall_depth = max(
+                    4, round((8 + self.terrain[x][y].height * ELEVATION_STEP) * self.zoom)
+                )
                 tw, th = TILE_W * self.zoom, TILE_H * self.zoom
                 right = (round(cx + tw / 2), round(cy))
                 bottom = (round(cx), round(cy + th / 2))
@@ -2147,16 +2160,24 @@ class CityGame:
         if new_idx == self.zoom_index:
             return
         mx, my = mouse_logical
-        # Keep the tile under the cursor in approximately the same screen position.
+        # Preserve the point under the cursor, including the selected tile's elevation.
+        tile = self.screen_to_tile(mx, my)
+        anchor_height = (
+            self.terrain[tile[0]][tile[1]].height if tile is not None else 0
+        )
         old_tw, old_th = TILE_W * old_zoom, TILE_H * old_zoom
-        dx, dy = mx - self.camera_x, my - self.camera_y
+        dx = mx - self.camera_x
+        dy = my - self.camera_y + anchor_height * ELEVATION_STEP * old_zoom
         a, b = dx / (old_tw / 2), dy / (old_th / 2)
         tx, ty = (a+b)/2, (b-a)/2
         self.zoom_index = new_idx
         self.zoom = ZOOM_LEVELS[self.zoom_index]
         new_tw, new_th = TILE_W * self.zoom, TILE_H * self.zoom
         self.camera_x = mx - (tx-ty) * new_tw / 2
-        self.camera_y = my - (tx+ty) * new_th / 2
+        self.camera_y = (
+            my - (tx+ty) * new_th / 2
+            + anchor_height * ELEVATION_STEP * self.zoom
+        )
     
     def process_events(self) -> None:
         for event in pygame.event.get():
