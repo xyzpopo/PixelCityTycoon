@@ -50,6 +50,12 @@ DIG_STONE_REWARD = 3
 BRIDGE_MONEY_COST = 250
 BRIDGE_WOOD_COST = 2
 BRIDGE_STONE_COST = 1
+MINE_MONEY_COST = 5000
+MINE_WOOD_COST = 4
+MINE_STONE_COST = 3
+MINE_LAYER_DURATION_MINUTES = 6 * 60
+MINE_STONE_PER_LAYER = 8
+TERRAIN_RESTORE_STONE_COST = 2
 ELEVATION_STEP = 8
 CAMERA_SPEED = 210.0
 DAILY_INCOME_PER_RESIDENT = 25
@@ -88,14 +94,19 @@ C = {
     "white": (255, 255, 245),
 }
 
-TOOL_NAMES = ["F1 이동", "F2 제거", "F3 도로", "F4 집", "F6 굴착"]
-TOOL_KEYS = ["move", "clear", "road", "house", "dig"]
+TOOL_NAMES = [
+    "F1 이동", "F2 철거", "F3 도로", "F4 집",
+    "F6 굴착", "F7 채굴장", "F8 복원"
+]
+TOOL_KEYS = ["move", "clear", "road", "house", "dig", "mine", "restore"]
 TOOL_HINTS = {
-    "move": "이동: 빈 타일을 클릭해 작업자를 이동합니다.",
-    "clear": "제거: 나무 +목재 2 · 바위 +석재 2",
-    "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · 선택 후 R 회전",
-    "house": "집: 도로 옆에 건설 · ₩3,000 + 목재 1 + 석재 1",
-    "dig": "굴착: 지상은 산을 한 층 굴착 · 지하는 광맥 채굴",
+    "move": "이동: 빈 땅을 클릭해 작업자를 이동합니다.",
+    "clear": "철거: 나무·바위·도로·주택·채굴장 제거",
+    "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
+    "house": "집: 도로 옆 건설 · ₩3,000 + 목재 1 + 석재 1",
+    "dig": "굴착: 산을 한 층 낮추고 석재 획득",
+    "mine": "채굴장: 도로 옆 설치 · 지층별 6시간 자동 채굴",
+    "restore": "지형 복원: 빈 땅을 한 층 높임 · 석재 2",
 }
 
 
@@ -145,6 +156,9 @@ class CityGame:
         self.underground_layer = 1
         self.underground_mined: Set[Tuple[int, int, int]] = set()
         self.houses: Set[Tuple[int, int]] = set()
+        # (x, y) -> (current stratum 1..4, elapsed in-game minutes in that stratum).
+        # Layer 4 means the three available strata have been exhausted.
+        self.mines: Dict[Tuple[int, int], Tuple[int, float]] = {}
         self.expand_level = 0
         self.money = 100000
         self.population = 0
@@ -339,6 +353,7 @@ class CityGame:
         self.underground_view = False
         self.underground_layer = 1
         self.underground_mined.clear()
+        self.mines.clear()
         self.tool_dragging = False
         self.tool_drag_start_tile = None
         self.tool_drag_last_tile = None
@@ -613,7 +628,8 @@ class CityGame:
             terrain == "water" and (x, y) in self.roads
         ):
             return False
-        if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.houses:
+        if ((x, y) in self.trees or (x, y) in self.rocks
+                or (x, y) in self.houses or (x, y) in self.mines):
             return False
         return True
 
@@ -727,6 +743,32 @@ class CityGame:
             return False
         return True
 
+    def can_build_mine_on(
+        self, x: int, y: int, allow_worker: bool = False
+    ) -> bool:
+        """A mine needs a clear grass tile beside a built or planned road."""
+        return (
+            self.can_build_on(x, y, allow_worker=allow_worker)
+            and self.has_planned_adjacent_road(x, y)
+        )
+
+    def can_restore_terrain(
+        self, x: int, y: int, allow_worker: bool = False
+    ) -> bool:
+        """Raise empty land by one level; never overwrite water or city objects."""
+        if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
+            return False
+        tile = self.terrain[x][y]
+        if tile.terrain not in ("grass", "mountain") or tile.height >= 4:
+            return False
+        if ((x, y) in self.trees or (x, y) in self.rocks
+                or (x, y) in self.roads or (x, y) in self.houses
+                or (x, y) in self.mines):
+            return False
+        if (x, y) == (self.worker_x, self.worker_y) and not allow_worker:
+            return False
+        return True
+
     def can_build_road_on(self, x: int, y: int) -> bool:
         """Allow a bridge segment to extend from an existing or queued road."""
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
@@ -778,17 +820,19 @@ class CityGame:
         return "y" if y_links > x_links else "x"
 
     def reserved_build_cost(self) -> int:
-        """Money already committed to queued road and house orders."""
+        """Money already committed to queued construction orders."""
         total = 0
         for tool, x, y in self.work_queue:
             if tool == "road":
                 total += self.road_build_cost(x, y)[0]
             elif tool == "house":
                 total += HOUSE_MONEY_COST
+            elif tool == "mine":
+                total += MINE_MONEY_COST
         return total
 
     def reserved_material_costs(self) -> Tuple[int, int]:
-        """Wood and stone already committed to queued construction orders."""
+        """Wood and stone already committed to queued construction/terraforming."""
         reserved_wood = 0
         reserved_stone = 0
         for tool, x, y in self.work_queue:
@@ -799,6 +843,11 @@ class CityGame:
             elif tool == "house":
                 reserved_wood += HOUSE_WOOD_COST
                 reserved_stone += HOUSE_STONE_COST
+            elif tool == "mine":
+                reserved_wood += MINE_WOOD_COST
+                reserved_stone += MINE_STONE_COST
+            elif tool == "restore":
+                reserved_stone += TERRAIN_RESTORE_STONE_COST
         return reserved_wood, reserved_stone
 
     def has_planned_adjacent_road(self, x: int, y: int) -> bool:
@@ -841,55 +890,69 @@ class CityGame:
     def can_reserve_work_order(self, tool: str, x: int, y: int) -> Tuple[bool, str]:
         if not self.is_unlocked(x, y):
             return False, "아직 개척하지 않은 땅이에요. 먼저 땅을 확장하세요."
-        if tool.startswith("vein"):
-            try:
-                layer = int(tool[4:])
-            except ValueError:
-                return False, "잘못된 지하 채굴 작업이에요."
-            if not self.can_mine_underground_vein(x, y, layer):
-                return False, "이 타일에는 채굴할 광맥이 없거나 이미 채굴했어요."
-            return True, ""
+
         if tool == "clear":
-            if (x, y) not in self.trees and (x, y) not in self.rocks:
-                return False, "제거 예약은 나무나 바위에만 할 수 있어요."
+            if not (
+                (x, y) in self.trees or (x, y) in self.rocks
+                or (x, y) in self.roads or (x, y) in self.houses
+                or (x, y) in self.mines
+            ):
+                return False, "철거할 나무·바위·도로·건물이 없어요."
             return True, ""
+
         if tool == "dig":
             if not self.can_dig_terrain(x, y):
                 return False, "굴착은 개척 구역 안의 산 타일에만 예약할 수 있어요."
             return True, ""
-        if tool not in ("road", "house"):
+
+        if tool == "restore":
+            if not self.can_restore_terrain(
+                x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
+            ):
+                return False, "복원은 빈 육지의 높이가 4단계보다 낮을 때만 가능해요."
+            _reserved_wood, reserved_stone = self.reserved_material_costs()
+            if self.stone - reserved_stone < TERRAIN_RESTORE_STONE_COST:
+                return False, f"지형 복원에는 석재 {TERRAIN_RESTORE_STONE_COST}개가 필요해요."
+            return True, ""
+
+        if tool not in ("road", "house", "mine"):
             return False, "예약할 수 없는 작업 종류예요."
+
+        allow_worker = (x, y) == (self.worker_x, self.worker_y)
         if tool == "road":
             if not self.can_build_road_on(x, y):
                 return False, "도로는 빈 땅 또는 기존 도로에서 이어지는 물 위에만 놓을 수 있어요."
-        elif not self.can_build_on(x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)):
-            return False, "건설 예약은 비어 있는 잔디 타일에만 할 수 있어요."
+        elif tool == "house":
+            if not self.can_build_on(x, y, allow_worker=allow_worker):
+                return False, "건설 예약은 비어 있는 잔디 타일에만 할 수 있어요."
+        elif not self.can_build_mine_on(x, y, allow_worker=allow_worker):
+            return False, "채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요."
 
         available_money = self.money - self.reserved_build_cost()
         reserved_wood, reserved_stone = self.reserved_material_costs()
         available_wood = self.wood - reserved_wood
         available_stone = self.stone - reserved_stone
+
         if tool == "road":
             money_cost, wood_cost, stone_cost = self.road_build_cost(x, y)
-            if available_money < money_cost:
-                return False, f"도로/다리 건설 자금이 부족해요. 필요 자금: ₩{money_cost:,}"
-            if available_wood < wood_cost or available_stone < stone_cost:
-                return False, f"다리에는 목재 {wood_cost}개와 석재 {stone_cost}개가 필요해요."
-            return True, ""
-
-        if not self.has_planned_adjacent_road(x, y):
-            return False, "집은 이미 있는 도로나 먼저 예약한 도로 옆에만 예약할 수 있어요."
-        if available_money < HOUSE_MONEY_COST:
-            return False, f"주택 건설 자금이 부족해요. 필요 자금: ₩{HOUSE_MONEY_COST:,}"
-        if available_wood < HOUSE_WOOD_COST or available_stone < HOUSE_STONE_COST:
-            return False, (
-                f"주택에는 목재 {HOUSE_WOOD_COST}개와 석재 {HOUSE_STONE_COST}개가 필요해요."
+        elif tool == "house":
+            money_cost, wood_cost, stone_cost = (
+                HOUSE_MONEY_COST, HOUSE_WOOD_COST, HOUSE_STONE_COST
             )
+        else:
+            money_cost, wood_cost, stone_cost = (
+                MINE_MONEY_COST, MINE_WOOD_COST, MINE_STONE_COST
+            )
+
+        if available_money < money_cost:
+            return False, f"건설 자금이 부족해요. 필요 자금: ₩{money_cost:,}"
+        if available_wood < wood_cost or available_stone < stone_cost:
+            return False, f"필요 재료: 목재 {wood_cost}개 · 석재 {stone_cost}개"
         return True, ""
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
-        """Queue or cancel a clear, build, surface-dig, or underground-mine action."""
-        if tool not in ("clear", "road", "house", "dig", "vein1", "vein2", "vein3"):
+        """Queue or cancel demolition, construction, digging or terrain restoration."""
+        if tool not in ("clear", "road", "house", "dig", "mine", "restore"):
             return
 
         existing_index = next(
@@ -933,10 +996,8 @@ class CityGame:
         if tool == "road":
             self.road_directions[(x, y)] = self.infer_road_axis(x, y)
         labels = {
-            "clear": "제거", "road": "도로 건설",
-            "house": "주택 건설", "dig": "지형 굴착",
-            "vein1": "지하 1층 채굴", "vein2": "지하 2층 채굴",
-            "vein3": "지하 3층 채굴",
+            "clear": "철거", "road": "도로 건설", "house": "주택 건설",
+            "dig": "지형 굴착", "mine": "채굴장 건설", "restore": "지형 복원",
         }
         self.notify(
             f"{labels[tool]} 예약 {len(self.work_queue)}개 · 클릭한 순서대로 작업합니다.",
@@ -1029,7 +1090,7 @@ class CityGame:
         return path
 
     def remove_resource_at(self, x: int, y: int, start_animation: bool = True) -> bool:
-        """Remove a tree or rock and apply the usual rewards/tutorial progress."""
+        """Clear natural resources or demolish a road/building on the target tile."""
         target = (x, y)
         if target in self.trees:
             self.trees.remove(target)
@@ -1046,6 +1107,28 @@ class CityGame:
                 self.start_worker_action("mine", x, y)
             self.stone += 2
             self.notify("바위를 제거했어요! 석재 +2")
+            return True
+        if target in self.roads:
+            self.roads.remove(target)
+            self.road_directions.pop(target, None)
+            if self.selected_road_tile == target:
+                self.selected_road_tile = None
+            if start_animation:
+                self.start_worker_action("mine", x, y)
+            self.notify("도로를 철거했어요. 자원은 반환되지 않아요.")
+            return True
+        if target in self.houses:
+            self.houses.remove(target)
+            self.population = max(0, self.population - 4)
+            if start_animation:
+                self.start_worker_action("mine", x, y)
+            self.notify("주택을 철거했어요. 주민 4명이 도시를 떠났어요.")
+            return True
+        if target in self.mines:
+            del self.mines[target]
+            if start_animation:
+                self.start_worker_action("mine", x, y)
+            self.notify("채굴장을 철거했어요. 진행 중이던 채굴은 중단됐어요.")
             return True
         return False
 
@@ -1065,8 +1148,26 @@ class CityGame:
         )
         return True
 
+    def restore_terrain_at(self, x: int, y: int) -> bool:
+        """Rebuild one elevation step on empty land using stored stone."""
+        if not self.can_restore_terrain(x, y):
+            self.notify("이 타일에는 지형을 복원할 수 없어요.", 2)
+            return False
+        if self.stone < TERRAIN_RESTORE_STONE_COST:
+            self.notify("지형 복원에 필요한 석재가 부족해요.", 2)
+            return False
+        self.stone -= TERRAIN_RESTORE_STONE_COST
+        tile = self.terrain[x][y]
+        tile.height = min(4, tile.height + 1)
+        tile.terrain = "mountain"
+        tile.variation = self.rng.randrange(3)
+        self.notify(
+            f"지형을 한 층 복원했어요! 높이 {tile.height}/4 · 석재 -{TERRAIN_RESTORE_STONE_COST}"
+        )
+        return True
+
     def perform_build_order(self, tool: str, x: int, y: int, start_animation: bool = True) -> bool:
-        """Apply a queued road or house construction after the worker arrives."""
+        """Apply a queued road, house or mine construction after the worker arrives."""
         if tool == "road":
             if not self.can_build_road_on(x, y):
                 self.notify("예약한 도로 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
@@ -1091,6 +1192,7 @@ class CityGame:
             )
             self.check_tutorial()
             return True
+
         if tool == "house":
             if not self.can_build_on(x, y):
                 self.notify("예약한 주택 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
@@ -1116,6 +1218,26 @@ class CityGame:
             )
             self.check_tutorial()
             return True
+
+        if tool == "mine":
+            if not self.can_build_mine_on(x, y):
+                self.notify("채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요.", 2.8)
+                return False
+            if (self.money < MINE_MONEY_COST or self.wood < MINE_WOOD_COST
+                    or self.stone < MINE_STONE_COST):
+                self.notify("채굴장 건설에 필요한 자금 또는 자원이 부족해요.", 2.8)
+                return False
+            self.money -= MINE_MONEY_COST
+            self.wood -= MINE_WOOD_COST
+            self.stone -= MINE_STONE_COST
+            self.mines[(x, y)] = (1, 0.0)
+            if start_animation:
+                self.start_worker_action("build", x, y)
+            self.notify(
+                f"채굴장 완공! 지하 1층부터 자동 채굴 · -₩{MINE_MONEY_COST:,} · "
+                f"목재 -{MINE_WOOD_COST} · 석재 -{MINE_STONE_COST}", 3.5
+            )
+            return True
         return False
 
     def update_work_queue(self) -> None:
@@ -1123,18 +1245,27 @@ class CityGame:
         while self.work_queue:
             tool, x, y = self.work_queue[0]
             if tool == "clear":
-                valid = (x, y) in self.trees or (x, y) in self.rocks
+                valid = (
+                    (x, y) in self.trees or (x, y) in self.rocks
+                    or (x, y) in self.roads or (x, y) in self.houses
+                    or (x, y) in self.mines
+                )
             elif tool == "road":
                 valid = self.can_build_road_on(x, y)
             elif tool == "house":
-                valid = (self.can_build_on(x, y, allow_worker=True)
-                         and self.has_planned_adjacent_road(x, y))
+                valid = (
+                    self.can_build_on(x, y, allow_worker=True)
+                    and self.has_planned_adjacent_road(x, y)
+                )
+            elif tool == "mine":
+                valid = self.can_build_mine_on(x, y, allow_worker=True)
             elif tool == "dig":
                 valid = self.can_dig_terrain(x, y)
-            elif tool.startswith("vein"):
-                valid = self.can_mine_underground_vein(x, y, int(tool[4:]))
+            elif tool == "restore":
+                valid = self.can_restore_terrain(x, y, allow_worker=True)
             else:
                 valid = False
+
             if valid:
                 break
             self.work_queue.pop(0)
@@ -1150,7 +1281,7 @@ class CityGame:
 
         tool, x, y = self.work_queue[0]
         target = (x, y)
-        if tool in ("clear", "dig") or tool.startswith("vein"):
+        if tool in ("clear", "dig"):
             path = self.find_worker_path_to_work_target(target)
         else:
             path = self.find_worker_path_to_action_target(target)
@@ -1174,7 +1305,7 @@ class CityGame:
         self.work_path_active = False
         if tool == "clear":
             action = "chop" if (x, y) in self.trees else "mine"
-        elif tool == "dig" or tool.startswith("vein"):
+        elif tool == "dig":
             action = "mine"
         else:
             action = "build"
@@ -1198,8 +1329,8 @@ class CityGame:
             self.remove_resource_at(x, y, start_animation=False)
         elif tool == "dig":
             self.dig_terrain_at(x, y)
-        elif tool.startswith("vein"):
-            self.mine_underground_vein(x, y, int(tool[4:]))
+        elif tool == "restore":
+            self.restore_terrain_at(x, y)
         else:
             built = self.perform_build_order(tool, x, y, start_animation=False)
             if not built and tool == "road":
@@ -1210,8 +1341,8 @@ class CityGame:
                    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)])
 
     def act_on_tile(self, x: int, y: int) -> None:
-        """Compatibility entry point: work modes now queue actions instead of executing instantly."""
-        if self.tool in ("clear", "road", "house", "dig"):
+        """Compatibility entry point: all non-movement tools queue actions."""
+        if self.tool in ("clear", "road", "house", "dig", "mine", "restore"):
             self.toggle_work_order(self.tool, x, y)
 
     def check_tutorial(self) -> None:
@@ -1249,9 +1380,13 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 9,
+            "version": 10,
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
+            "mine_sites": [
+                [x, y, layer, progress]
+                for (x, y), (layer, progress) in sorted(self.mines.items())
+            ],
             "map_rotation": self.map_rotation,
             "camera_follow_worker": self.camera_follow_worker,
             "underground_view": self.underground_view,
@@ -1340,6 +1475,24 @@ class CityGame:
                             and entry[2] in ("x", "y")):
                         self.road_directions[(entry[0], entry[1])] = entry[2]
             self.houses = {tuple(p) for p in data.get("houses", [])}
+            self.mines = {}
+            saved_mines = data.get("mine_sites", [])
+            if isinstance(saved_mines, list):
+                for entry in saved_mines:
+                    if not (
+                        isinstance(entry, list) and len(entry) == 4
+                        and type(entry[0]) is int and type(entry[1]) is int
+                        and type(entry[2]) is int
+                        and isinstance(entry[3], (int, float)) and not isinstance(entry[3], bool)
+                        and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H
+                        and 1 <= entry[2] <= 4 and 0 <= entry[3] < MINE_LAYER_DURATION_MINUTES
+                    ):
+                        continue
+                    pos = (entry[0], entry[1])
+                    if (self.is_unlocked(*pos) and self.terrain[pos[0]][pos[1]].terrain == "grass"
+                            and pos not in self.roads and pos not in self.houses
+                            and pos not in self.trees and pos not in self.rocks):
+                        self.mines[pos] = (entry[2], float(entry[3]))
             self.expand_level = int(data.get("expand_level", 0))
             self.money = int(data.get("money", 100000))
             self.population = int(data.get("population", 0))
@@ -1374,7 +1527,7 @@ class CityGame:
                         continue
                     tool = order.get("tool")
                     x, y = order.get("x"), order.get("y")
-                    if (tool not in ("clear", "road", "house", "dig", "vein1", "vein2", "vein3")
+                    if (tool not in ("clear", "road", "house", "dig", "mine", "restore")
                             or type(x) is not int or type(y) is not int
                             or not (0 <= x < MAP_W and 0 <= y < MAP_H)
                             or not self.is_unlocked(x, y)):
@@ -1392,6 +1545,10 @@ class CityGame:
                     if tool == "house" and not self.can_build_on(x, y, allow_worker=True):
                         continue
                     if tool == "house" and not self.has_planned_adjacent_road(x, y):
+                        continue
+                    if tool == "mine" and not self.can_build_mine_on(x, y, allow_worker=True):
+                        continue
+                    if tool == "restore" and not self.can_restore_terrain(x, y, allow_worker=True):
                         continue
                     self.work_queue.append((tool, x, y))
                     if tool == "road":
@@ -2718,6 +2875,32 @@ class CityGame:
                 if VIEW_RECT.collidepoint(*logical):
                     self.change_zoom(1 if event.y > 0 else -1, logical)
 
+    def update_mines(self, game_minutes_elapsed: float) -> None:
+        """Each mine extracts one stratum at a time, independent of surface tiles."""
+        if game_minutes_elapsed <= 0:
+            return
+        completed_layers = 0
+        finished_mines = 0
+        for position, (layer, progress) in list(self.mines.items()):
+            if layer > 3:
+                continue
+            progress += game_minutes_elapsed
+            while progress >= MINE_LAYER_DURATION_MINUTES and layer <= 3:
+                progress -= MINE_LAYER_DURATION_MINUTES
+                self.stone += MINE_STONE_PER_LAYER
+                completed_layers += 1
+                layer += 1
+                if layer > 3:
+                    progress = 0.0
+                    finished_mines += 1
+            self.mines[position] = (layer, progress)
+        if completed_layers:
+            suffix = f" · 채굴 완료 {finished_mines}곳" if finished_mines else ""
+            self.notify(
+                f"채굴장 지층 채굴 완료 · 석재 +{completed_layers * MINE_STONE_PER_LAYER}{suffix}",
+                3.2
+            )
+
     def update(self, dt: float) -> None:
         self.update_worker(dt)
         if not self.modal_seed:
@@ -2758,7 +2941,9 @@ class CityGame:
         now = time.time()
         elapsed = now - self.last_clock_tick
         self.last_clock_tick = now
-        self.game_minutes += elapsed * 6
+        game_elapsed_minutes = elapsed * 6
+        self.game_minutes += game_elapsed_minutes
+        self.update_mines(game_elapsed_minutes)
         while self.game_minutes >= 24 * 60:
             self.game_minutes -= 24 * 60
             self.day += 1
