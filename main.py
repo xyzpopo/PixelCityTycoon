@@ -47,6 +47,9 @@ HOUSE_MONEY_COST = 3000
 HOUSE_WOOD_COST = 1
 HOUSE_STONE_COST = 1
 DIG_STONE_REWARD = 3
+ELEVATION_STEP = 8
+CAMERA_SPEED = 210.0
+DAILY_INCOME_PER_RESIDENT = 25
 
 # Palette: restrained 16-bit-inspired colors.
 C = {
@@ -87,7 +90,7 @@ TOOL_KEYS = ["move", "clear", "road", "house", "dig"]
 TOOL_HINTS = {
     "move": "이동: 빈 타일을 클릭해 작업자를 이동합니다.",
     "clear": "제거: 나무 +목재 2 · 바위 +석재 2",
-    "road": "도로: ₩100 + 목재 1 · R/방향 버튼으로 축 전환",
+    "road": "도로: 드래그로 건설 · 설치된 도로 선택 후 R로 회전",
     "house": "집: 도로 옆에 건설 · ₩3,000 + 목재 1 + 석재 1",
     "dig": "굴착: 산 타일을 평탄화하고 석재 3 획득",
 }
@@ -105,6 +108,7 @@ def tile_key(x: int, y: int) -> str:
 class TileInfo:
     terrain: str = "grass"
     variation: int = 0
+    height: int = 0
 
 
 class CityGame:
@@ -115,6 +119,8 @@ class CityGame:
         pygame.display.set_caption(APP_NAME + " - Prototype 0.1")
         self.window = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.canvas = pygame.Surface((LOGICAL_W, LOGICAL_H))
+        # Reuse the transparent cliff layer instead of allocating a new surface each frame.
+        self.cliff_layer = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         self.clock = pygame.time.Clock()
         self.running = True
 
@@ -128,7 +134,8 @@ class CityGame:
         self.rocks: Set[Tuple[int, int]] = set()
         self.roads: Set[Tuple[int, int]] = set()
         self.road_directions: Dict[Tuple[int, int], str] = {}
-        self.road_direction = "x"
+        self.road_direction = "x"  # Legacy default; road tiles infer direction from neighbors.
+        self.selected_road_tile: Optional[Tuple[int, int]] = None
         self.houses: Set[Tuple[int, int]] = set()
         self.expand_level = 0
         self.money = 100000
@@ -157,8 +164,14 @@ class CityGame:
         self.worker_pending_action: Optional[Tuple[str, int, int]] = None
         self.work_queue: List[Tuple[str, int, int]] = []
         self.work_path_active = False
-        self.dragging = False
+        self.dragging = False  # Middle-button camera panning.
         self.last_mouse = (0, 0)
+        self.tool_dragging = False
+        self.tool_drag_start_tile: Optional[Tuple[int, int]] = None
+        self.tool_drag_last_tile: Optional[Tuple[int, int]] = None
+        self.tool_drag_start_pos = (0, 0)
+        self.tool_drag_moved = False
+        self.tool_drag_visited: Set[Tuple[int, int]] = set()
         self.modal_seed = False
         self.seed_text = ""
         self.notice = "새로운 도시를 시작해 보세요!"
@@ -312,6 +325,12 @@ class CityGame:
         self.roads.clear()
         self.road_directions.clear()
         self.road_direction = "x"
+        self.selected_road_tile = None
+        self.tool_dragging = False
+        self.tool_drag_start_tile = None
+        self.tool_drag_last_tile = None
+        self.tool_drag_moved = False
+        self.tool_drag_visited.clear()
         self.houses.clear()
         self.expand_level = 0
         self.money = 100000
@@ -368,13 +387,17 @@ class CityGame:
                     dist = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
                     if dist < radius + self.rng.uniform(-0.3, 0.9):
                         if self.terrain[x][y].terrain != "water":
+                            # Hills contain several walkable elevation steps.
+                            level = int(clamp(math.ceil((radius - dist + 0.8) / 1.15), 1, 4))
                             self.terrain[x][y].terrain = "mountain"
+                            self.terrain[x][y].height = max(self.terrain[x][y].height, level)
 
         # Preserve a broad starter clearing but leave some trees around it.
         sx, sy = center
         for x in range(sx - 2, sx + 3):
             for y in range(sy - 2, sy + 3):
                 self.terrain[x][y].terrain = "grass"
+                self.terrain[x][y].height = 0
 
         # Trees use several clusters to create forests and scattered woodland.
         forest_centers = []
@@ -409,6 +432,7 @@ class CityGame:
             x, y = pos
             if 0 <= x < MAP_W and 0 <= y < MAP_H and self.terrain[x][y].terrain != "water":
                 self.terrain[x][y].terrain = "grass"
+                self.terrain[x][y].height = 0
                 self.rocks.discard(pos)
                 self.trees.add(pos)
                 forced_trees += 1
@@ -424,6 +448,7 @@ class CityGame:
             self.trees.discard(path_tile)
             self.rocks.discard(path_tile)
         self.terrain[starter_rock[0]][starter_rock[1]].terrain = "grass"
+        self.terrain[starter_rock[0]][starter_rock[1]].height = 0
         self.trees.discard(starter_rock)
         self.rocks.add(starter_rock)
 
@@ -453,8 +478,10 @@ class CityGame:
     def tile_to_screen(self, x: int, y: int) -> Tuple[float, float]:
         tw = TILE_W * self.zoom
         th = TILE_H * self.zoom
+        height = self.terrain[x][y].height if self.terrain else 0
         return ((x - y) * tw / 2 + self.camera_x,
-                (x + y) * th / 2 + self.camera_y)
+                (x + y) * th / 2 + self.camera_y
+                - height * ELEVATION_STEP * self.zoom)
 
     def screen_to_tile(self, sx: float, sy: float) -> Optional[Tuple[int, int]]:
         tw = TILE_W * self.zoom
@@ -468,18 +495,20 @@ class CityGame:
         xf = (a + b) / 2
         yf = (b - a) / 2
         candidates = []
-        for x in range(math.floor(xf) - 1, math.floor(xf) + 2):
-            for y in range(math.floor(yf) - 1, math.floor(yf) + 2):
+        # Raised tile surfaces can overlap the grid position below them.
+        for x in range(math.floor(xf) - 6, math.floor(xf) + 7):
+            for y in range(math.floor(yf) - 6, math.floor(yf) + 7):
                 if 0 <= x < MAP_W and 0 <= y < MAP_H:
                     cx, cy = self.tile_to_screen(x, y)
                     nx = abs(sx - cx) / (tw / 2)
                     ny = abs(sy - cy) / (th / 2)
                     if nx + ny <= 1.03:
-                        candidates.append((nx + ny, x + y, x, y))
+                        candidates.append((-self.terrain[x][y].height, nx + ny,
+                                           -(x + y), x, y))
         if not candidates:
             return None
         candidates.sort()
-        _, _, x, y = candidates[0]
+        _, _, _, x, y = candidates[0]
         return x, y
 
     # ------------------------------------------------------------------
@@ -489,11 +518,21 @@ class CityGame:
         """Return whether the worker can occupy a tile."""
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
-        if self.terrain[x][y].terrain != "grass":
+        if self.terrain[x][y].terrain not in ("grass", "mountain"):
             return False
         if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.houses:
             return False
         return True
+
+    def can_step_worker(self, start: Tuple[int, int], end: Tuple[int, int]) -> bool:
+        """Allow walking on terraces but limit each step to one height level."""
+        if not self.worker_can_stand(*end):
+            return False
+        sx, sy = start
+        ex, ey = end
+        if not (0 <= sx < MAP_W and 0 <= sy < MAP_H):
+            return False
+        return abs(self.terrain[sx][sy].height - self.terrain[ex][ey].height) <= 1
 
     def find_worker_path(self, goal: Tuple[int, int]) -> Optional[List[Tuple[int, int]]]:
         """Find a four-direction path with BFS. Trees, rocks, houses and terrain block movement."""
@@ -515,7 +554,7 @@ class CityGame:
             x, y = current
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 nxt = (x + dx, y + dy)
-                if nxt in came_from or not self.worker_can_stand(*nxt):
+                if nxt in came_from or not self.can_step_worker(current, nxt):
                     continue
                 came_from[nxt] = current
                 frontier.append(nxt)
@@ -599,7 +638,8 @@ class CityGame:
         """Only exposed, unlocked mountain tiles can be excavated."""
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
-        if self.terrain[x][y].terrain != "mountain":
+        if (self.terrain[x][y].terrain != "mountain"
+                and self.terrain[x][y].height <= 0):
             return False
         if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.roads or (x, y) in self.houses:
             return False
@@ -619,6 +659,12 @@ class CityGame:
         """Actions are limited to a small Manhattan radius around the character."""
         wx, wy = self.worker_grid_position()
         return abs(x - wx) + abs(y - wy) <= ACTION_RANGE
+
+    def infer_road_axis(self, x: int, y: int) -> str:
+        """Infer a new road's default marking from its connected neighbors."""
+        x_links = int((x - 1, y) in self.roads) + int((x + 1, y) in self.roads)
+        y_links = int((x, y - 1) in self.roads) + int((x, y + 1) in self.roads)
+        return "y" if y_links > x_links else "x"
 
     def reserved_build_cost(self) -> int:
         """Money already committed to queued road and house orders."""
@@ -727,7 +773,7 @@ class CityGame:
 
         self.work_queue.append((tool, x, y))
         if tool == "road":
-            self.road_directions[(x, y)] = self.road_direction
+            self.road_directions[(x, y)] = self.infer_road_axis(x, y)
         labels = {
             "clear": "제거", "road": "도로 건설",
             "house": "주택 건설", "dig": "지형 굴착"
@@ -799,7 +845,7 @@ class CityGame:
             x, y = current
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 nxt = (x + dx, y + dy)
-                if nxt in came_from or not self.worker_can_stand(*nxt):
+                if nxt in came_from or not self.can_step_worker(current, nxt):
                     continue
                 came_from[nxt] = current
                 frontier.append(nxt)
@@ -843,10 +889,15 @@ class CityGame:
         if not self.can_dig_terrain(x, y):
             self.notify("굴착할 수 없는 지형이에요.", 2)
             return False
-        self.terrain[x][y].terrain = "grass"
-        self.terrain[x][y].variation = self.rng.randrange(3)
+        tile = self.terrain[x][y]
+        tile.height = max(0, tile.height - 1)
+        if tile.height == 0:
+            tile.terrain = "grass"
+        tile.variation = self.rng.randrange(3)
         self.stone += DIG_STONE_REWARD
-        self.notify(f"산 타일을 굴착했어요! 석재 +{DIG_STONE_REWARD}")
+        self.notify(
+            f"지형을 한 층 굴착했어요! 남은 높이 {tile.height} · 석재 +{DIG_STONE_REWARD}"
+        )
         return True
 
     def perform_build_order(self, tool: str, x: int, y: int, start_animation: bool = True) -> bool:
@@ -861,7 +912,7 @@ class CityGame:
             self.money -= ROAD_MONEY_COST
             self.wood -= ROAD_WOOD_COST
             self.roads.add((x, y))
-            self.road_directions.setdefault((x, y), self.road_direction)
+            self.road_directions.setdefault((x, y), self.infer_road_axis(x, y))
             if start_animation:
                 self.start_worker_action("build", x, y)
             if not self.tutorial_done:
@@ -1019,7 +1070,7 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 6,
+            "version": 7,
             "seed": self.seed,
             "trees": [list(p) for p in sorted(self.trees)],
             "rocks": [list(p) for p in sorted(self.rocks)],
@@ -1027,6 +1078,10 @@ class CityGame:
             "road_direction": self.road_direction,
             "road_directions": [
                 [x, y, axis] for (x, y), axis in sorted(self.road_directions.items())
+            ],
+            "terrain_heights": [
+                [self.terrain[x][y].height for y in range(MAP_H)]
+                for x in range(MAP_W)
             ],
             "houses": [list(p) for p in sorted(self.houses)],
             "expand_level": self.expand_level,
@@ -1057,6 +1112,19 @@ class CityGame:
         try:
             data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
             self.generate_world(int(data["seed"]))
+            saved_heights = data.get("terrain_heights")
+            if isinstance(saved_heights, list) and len(saved_heights) == MAP_W:
+                for x, column in enumerate(saved_heights):
+                    if not isinstance(column, list) or len(column) != MAP_H:
+                        continue
+                    for y, raw_height in enumerate(column):
+                        if type(raw_height) is int:
+                            height = int(clamp(raw_height, 0, 4))
+                            self.terrain[x][y].height = height
+                            if height > 0 and self.terrain[x][y].terrain != "water":
+                                self.terrain[x][y].terrain = "mountain"
+                            elif height == 0 and self.terrain[x][y].terrain == "mountain":
+                                self.terrain[x][y].terrain = "grass"
             self.trees = {tuple(p) for p in data.get("trees", [])}
             self.rocks = {tuple(p) for p in data.get("rocks", [])}
             self.roads = {tuple(p) for p in data.get("roads", [])}
@@ -1124,7 +1192,7 @@ class CityGame:
                         continue
                     self.work_queue.append((tool, x, y))
                     if tool == "road":
-                        self.road_directions.setdefault((x, y), self.road_direction)
+                        self.road_directions.setdefault((x, y), self.infer_road_axis(x, y))
 
             self.tutorial_step = int(data.get("tutorial_step", 0))
             self.tutorial_done = bool(data.get("tutorial_done", False))
@@ -1154,7 +1222,11 @@ class CityGame:
         if terrain == "water":
             color = C["water"]
         elif terrain == "mountain":
-            color = C["grass_b"]
+            height_colors = [
+                (112, 165, 91), (125, 164, 99),
+                (139, 158, 105), (153, 151, 109)
+            ]
+            color = height_colors[int(clamp(self.terrain[x][y].height, 1, 4)) - 1]
         else:
             variation = self.terrain[x][y].variation
             color = [C["grass_a"], C["grass_b"], C["grass_c"]][variation]
@@ -1174,23 +1246,70 @@ class CityGame:
                                  (round(cx - 4 * self.zoom), round(cy)),
                                  (round(cx + 3 * self.zoom), round(cy)), max(1, round(self.zoom)))
         elif terrain == "mountain":
-            h = (7 + ((x * 13 + y * 7) % 5)) * self.zoom
-            top = [(round(cx), round(cy - h - th / 2)),
-                   (round(cx + tw / 2), round(cy - h)),
-                   (round(cx), round(cy - h + th / 2)),
-                   (round(cx - tw / 2), round(cy - h))]
-            pygame.draw.polygon(self.canvas, C["mountain_dark"],
-                                [(round(cx - tw / 2), round(cy - h)),
-                                 (round(cx), round(cy - h + th / 2)),
-                                 (round(cx), round(cy + th / 2)),
-                                 (round(cx - tw / 2), round(cy))])
-            pygame.draw.polygon(self.canvas, C["mountain_side"],
-                                [(round(cx), round(cy - h + th / 2)),
-                                 (round(cx + tw / 2), round(cy - h)),
-                                 (round(cx + tw / 2), round(cy)),
-                                 (round(cx), round(cy + th / 2))])
-            pygame.draw.polygon(self.canvas, C["mountain_top"], top)
-            pygame.draw.line(self.canvas, C["mountain_light"], top[0], top[3], max(1, round(self.zoom)))
+            # Contour marks identify the top of a stepped elevation terrace.
+            offset = max(2, round(3 * self.zoom))
+            pygame.draw.line(
+                self.canvas, (173, 187, 126),
+                (round(cx - 5 * self.zoom), round(cy - offset)),
+                (round(cx + 2 * self.zoom), round(cy - offset)),
+                max(1, round(self.zoom))
+            )
+            pygame.draw.line(
+                self.canvas, (91, 119, 73),
+                (round(cx - 2 * self.zoom), round(cy + offset)),
+                (round(cx + 5 * self.zoom), round(cy + offset)),
+                max(1, round(self.zoom))
+            )
+
+    def draw_elevation_cliffs(self) -> None:
+        """Draw stepped cliff faces and fade nearby foreground walls around the worker."""
+        layer = self.cliff_layer
+        layer.fill((0, 0, 0, 0))
+        layer.set_clip(VIEW_RECT)
+        tw, th = TILE_W * self.zoom, TILE_H * self.zoom
+        worker_gx, worker_gy = self.worker_grid_position()
+        worker_depth = worker_gx + worker_gy
+        for depth in range(MAP_W + MAP_H - 1):
+            for x in range(MAP_W):
+                y = depth - x
+                if not (0 <= y < MAP_H) or not self.is_unlocked(x, y):
+                    continue
+                height = self.terrain[x][y].height
+                if height <= 0:
+                    continue
+                cx, cy = self.tile_to_screen(x, y)
+                if cx < -100 or cx > LOGICAL_W + 100 or cy < TOP_H - 130 or cy > BOTTOM_Y + 100:
+                    continue
+                right = (round(cx + tw / 2), round(cy))
+                bottom = (round(cx), round(cy + th / 2))
+                left = (round(cx - tw / 2), round(cy))
+                for nx, ny, edge_a, edge_b, base_color in (
+                    (x + 1, y, right, bottom, (77, 87, 78)),
+                    (x, y + 1, left, bottom, (61, 72, 69)),
+                ):
+                    if not (0 <= nx < MAP_W and 0 <= ny < MAP_H) or not self.is_unlocked(nx, ny):
+                        continue
+                    drop = height - self.terrain[nx][ny].height
+                    if drop <= 0:
+                        continue
+                    wall_drop = round(drop * ELEVATION_STEP * self.zoom)
+                    near_worker = (
+                        abs(nx - worker_gx) + abs(ny - worker_gy) <= 4
+                        and (x + y) > worker_depth
+                    )
+                    alpha = 125 if near_worker else 255
+                    color = (*base_color, alpha)
+                    lower_a = (edge_a[0], edge_a[1] + wall_drop)
+                    lower_b = (edge_b[0], edge_b[1] + wall_drop)
+                    pygame.draw.polygon(
+                        layer, color, [edge_a, edge_b, lower_b, lower_a]
+                    )
+                    pygame.draw.line(
+                        layer, (38, 48, 45, alpha), lower_a, lower_b,
+                        max(1, round(self.zoom))
+                    )
+        layer.set_clip(None)
+        self.canvas.blit(layer, (0, 0))
 
     def draw_tree(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
@@ -1301,18 +1420,25 @@ class CityGame:
         if len(inner) >= 3:
             pygame.draw.polygon(self.canvas, C["road"], inner)
 
-        # The center marking follows the orientation chosen when this tile
-        # was reserved: grid-X is screen ↘/↖, grid-Y is screen ↙/↗.
-        # The connected road surface remains automatic and independent of lane axis.
+        # Mark actual connections only. Two perpendicular branches meet at the
+        # center as a sharp 90-degree turn; no rounded corner is drawn.
         center = (round(cx), round(cy))
         dash_length = max(2.0, 4.0 * z)
         dash_gap = max(1.5, 2.8 * z)
         line_width = max(1, round(1.4 * z))
-        road_axis = self.road_directions.get((x, y), "x")
-        lane_sides = ("east", "west") if road_axis == "x" else ("south", "north")
-        for name, _neighbor, _a, _b, dx, dy in side_specs:
-            if name not in lane_sides:
-                continue
+        connected_sides = [
+            (name, dx, dy)
+            for name, neighbor, _a, _b, dx, dy in side_specs
+            if connected[name] and neighbor in self.roads
+        ]
+        if not connected_sides:
+            road_axis = self.road_directions.get((x, y), "x")
+            allowed_sides = ("east", "west") if road_axis == "x" else ("south", "north")
+            connected_sides = [
+                (name, dx, dy) for name, _neighbor, _a, _b, dx, dy in side_specs
+                if name in allowed_sides
+            ]
+        for _name, dx, dy in connected_sides:
             length = math.hypot(dx, dy)
             if length <= 0:
                 continue
@@ -1322,8 +1448,21 @@ class CityGame:
                 end_offset = min(length, offset + dash_length)
                 start_point = (round(cx + ux * offset), round(cy + uy * offset))
                 end_point = (round(cx + ux * end_offset), round(cy + uy * end_offset))
-                pygame.draw.line(self.canvas, C["road_center"], start_point, end_point, line_width)
+                pygame.draw.line(
+                    self.canvas, C["road_center"], start_point, end_point, line_width
+                )
                 offset += dash_length + dash_gap
+
+        # The selected installed tile shows its stored orientation. Rotating
+        # it changes this marker while the road network keeps its square joins.
+        if self.selected_road_tile == (x, y):
+            axis_mark = "↘" if self.road_directions.get((x, y), "x") == "x" else "↙"
+            self.text(self.canvas, axis_mark, center[0], center[1], 8, C["white"], center=True)
+            selected_outline = self.diamond(cx, cy, tw, th)
+            pygame.draw.polygon(
+                self.canvas, C["gold"], selected_outline,
+                max(1, round(2 * z))
+            )
 
     def draw_house(self, x: int, y: int) -> None:
         cx, cy = self.tile_to_screen(x, y)
@@ -1357,8 +1496,14 @@ class CityGame:
         """Return the worker's interpolated world position during a step."""
         wx, wy = self.worker_grid_position()
         tw, th = TILE_W * self.zoom, TILE_H * self.zoom
+        height = self.terrain[self.worker_x][self.worker_y].height
+        if self.worker_path:
+            nx, ny = self.worker_path[0]
+            next_height = self.terrain[nx][ny].height
+            height += (next_height - height) * clamp(self.worker_move_progress, 0.0, 1.0)
         return ((wx - wy) * tw / 2 + self.camera_x,
-                (wx + wy) * th / 2 + self.camera_y)
+                (wx + wy) * th / 2 + self.camera_y
+                - height * ELEVATION_STEP * self.zoom)
 
     def draw_worker(self) -> None:
         """Draw the worker with four facing directions and timed work frames."""
@@ -1570,7 +1715,6 @@ class CityGame:
         # The dark background makes the edge of the owned island easy to read.
         pygame.draw.rect(self.canvas, (28, 39, 55), VIEW_RECT)
 
-        wall_depth = max(4, round(8 * self.zoom))
         wall_color_a = (91, 63, 48)
         wall_color_b = (62, 47, 43)
 
@@ -1587,6 +1731,9 @@ class CityGame:
                     continue
 
                 self.draw_tile(x, y)
+                wall_depth = max(
+                    4, round((8 + self.terrain[x][y].height * ELEVATION_STEP) * self.zoom)
+                )
                 tw, th = TILE_W * self.zoom, TILE_H * self.zoom
                 right = (round(cx + tw / 2), round(cy))
                 bottom = (round(cx), round(cy + th / 2))
@@ -1620,32 +1767,39 @@ class CityGame:
                         (bottom[0], bottom[1] + wall_depth), 1
                     )
 
-        # Render flat road surfaces after the terrain, then sort tall objects and
-        # the moving character by their current isometric depth. This prevents a
-        # foreground ground tile from being drawn over the character mid-step.
+        # Roads sit above the terrain tops; each tile's center markings use
+        # its real orthogonal neighbor mask.
         for x, y in self.roads:
             if self.is_unlocked(x, y):
                 cx, cy = self.tile_to_screen(x, y)
                 if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
                     self.draw_road(x, y)
 
+        self.draw_elevation_cliffs()
         self.draw_worker_path_preview()
 
-        depth_items: List[Tuple[float, float, int, int, int, str]] = []
+        depth_items: List[Tuple[float, float, int, int, int, str]] =
         for x in range(MAP_W):
             for y in range(MAP_H):
                 if not self.is_unlocked(x, y):
                     continue
                 if (x, y) in self.trees:
-                    depth_items.append((x + y, x, 0, x, y, "tree"))
+                    depth_items.append(((x + y) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, x, 0, x, y, "tree"))
                 if (x, y) in self.rocks:
-                    depth_items.append((x + y, x, 1, x, y, "rock"))
+                    depth_items.append(((x + y) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, x, 1, x, y, "rock"))
                 if (x, y) in self.houses:
-                    depth_items.append((x + y, x, 2, x, y, "house"))
+                    depth_items.append(((x + y) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, x, 2, x, y, "house"))
 
         worker_gx, worker_gy = self.worker_grid_position()
-        depth_items.append((worker_gx + worker_gy, worker_gx, 3,
-                            self.worker_x, self.worker_y, "worker"))
+        worker_height = self.terrain[self.worker_x][self.worker_y].height
+        if self.worker_path:
+            nx, ny = self.worker_path[0]
+            worker_height += (
+                self.terrain[nx][ny].height - worker_height
+            ) * clamp(self.worker_move_progress, 0.0, 1.0)
+        depth_items.append(((worker_gx + worker_gy) * TILE_H / 2
+                            - worker_height * ELEVATION_STEP,
+                            worker_gx, 3, self.worker_x, self.worker_y, "worker"))
         depth_items.sort(key=lambda item: (item[0], item[1], item[2]))
 
         for _depth, _x_order, _kind_order, x, y, kind in depth_items:
@@ -1672,32 +1826,24 @@ class CityGame:
                 if self.tool == "house":
                     allowed = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
                 elif self.tool == "road":
-                    allowed = self.can_build_on(x, y)
+                    allowed = self.can_build_on(x, y) or (x, y) in self.roads
                 elif self.tool == "clear":
                     allowed = (x, y) in self.trees or (x, y) in self.rocks
                 elif self.tool == "dig":
                     allowed = self.can_dig_terrain(x, y)
                 else:
                     allowed = self.worker_can_stand(x, y)
-                if any(order[1] == x and order[2] == y for order in self.work_queue):
+                if self.selected_road_tile == (x, y):
+                    color = C["gold"]
+                elif any(order[1] == x and order[2] == y for order in self.work_queue):
                     color = C["gold"]
                 else:
                     color = C["green"] if allowed else C["red"]
                 pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
-                if self.tool == "road" and allowed:
-                    if self.road_direction == "x":
-                        start = (round(cx - TILE_W * self.zoom * 0.18),
-                                 round(cy - TILE_H * self.zoom * 0.18))
-                        end = (round(cx + TILE_W * self.zoom * 0.18),
-                               round(cy + TILE_H * self.zoom * 0.18))
-                    else:
-                        start = (round(cx - TILE_W * self.zoom * 0.18),
-                                 round(cy + TILE_H * self.zoom * 0.18))
-                        end = (round(cx + TILE_W * self.zoom * 0.18),
-                               round(cy - TILE_H * self.zoom * 0.18))
-                    pygame.draw.line(
-                        self.canvas, C["road_center"], start, end,
-                        max(1, round(2 * self.zoom))
+                if self.tool == "road" and allowed and (x, y) not in self.roads:
+                    pygame.draw.circle(
+                        self.canvas, C["road_center"],
+                        (round(cx), round(cy)), max(2, round(2 * self.zoom))
                     )
 
         # Tutorial card.
@@ -1805,8 +1951,9 @@ class CityGame:
         self.text(self.canvas, f"인구 {self.population}", 230, 7, 10, C["text"])
         self.text(self.canvas, f"목재 {self.wood}", 302, 7, 9, C["muted"])
         self.text(self.canvas, f"석재 {self.stone}", 359, 7, 9, C["muted"])
-        self.text(self.canvas, f"DAY {self.day}", 416, 7, 9, C["muted"])
-        self.text(self.canvas, f"시드 {self.seed}", 462, 7, 9, C["muted"])
+        self.text(self.canvas, f"+₩{self.population * DAILY_INCOME_PER_RESIDENT:,}/일",
+                  410, 7, 9, C["green"])
+        self.text(self.canvas, f"DAY {self.day}", 490, 7, 9, C["muted"])
         self.button(pygame.Rect(531, 5, 39, 21), "시드", small=True)
         self.button(pygame.Rect(573, 5, 29, 21), "저장", small=True)
         self.button(pygame.Rect(605, 5, 31, 21), "불러", small=True)
@@ -1817,10 +1964,12 @@ class CityGame:
         xs = [8, 78, 148, 218, 288]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
             self.button(pygame.Rect(xs[i], 294, 66, 23), name, self.tool == key, small=True)
-        # Road axis is selectable with this button or the R key.
-        road_arrow = "↘" if self.road_direction == "x" else "↙"
-        self.button(pygame.Rect(360, 294, 66, 23), f"방향 {road_arrow}",
-                    self.tool == "road", small=True)
+        # Rotate only a selected road that already exists in the city.
+        self.button(
+            pygame.Rect(360, 294, 66, 23), "도로 회전 R",
+            self.tool == "road" and self.selected_road_tile is not None,
+            small=True
+        )
         # Expansion is a separate utility button and does not replace the tool mode.
         cost_text = "최대" if self.expand_level >= 3 else f"₩{[5000,15000,35000][self.expand_level]:,}"
         self.button(pygame.Rect(434, 294, 80, 23), "땅 확장", small=True)
@@ -1890,16 +2039,123 @@ class CityGame:
         if VIEW_RECT.collidepoint(x, y):
             tile = self.screen_to_tile(x, y)
             if tile:
+                self.apply_single_tile_click(tile)
+
+    def apply_single_tile_click(self, tile: Tuple[int, int]) -> None:
+        x, y = tile
+        if self.tool == "road" and (x, y) in self.roads:
+            self.selected_road_tile = (x, y)
+            self.notify("설치된 도로를 선택했어요. R 또는 [도로 회전]으로 방향을 바꿔요.", 2.5)
+            return
+        if self.selected_road_tile != (x, y):
+            self.selected_road_tile = None
+        if self.tool == "move":
+            self.set_worker_destination(x, y)
+        else:
+            self.toggle_work_order(self.tool, x, y)
+
+    def queue_drag_order(self, tool: str, x: int, y: int) -> None:
+        """Queue one drag-painted tile without toggling existing reservations off."""
+        if any(order[1] == x and order[2] == y for order in self.work_queue):
+            return
+        if len(self.work_queue) >= MAX_WORK_QUEUE:
+            return
+        valid, _reason = self.can_reserve_work_order(tool, x, y)
+        if not valid:
+            return
+        self.work_queue.append((tool, x, y))
+        if tool == "road":
+            self.road_directions[(x, y)] = self.infer_road_axis(x, y)
+
+    def paint_drag_segment(
+        self, start: Tuple[int, int], end: Tuple[int, int]
+    ) -> None:
+        """Sample every grid tile crossed by a quick mouse drag."""
+        x0, y0 = start
+        x1, y1 = end
+        dx, dy = abs(x1 - x0), abs(y1 - y0)
+        sx, sy = (1 if x0 < x1 else -1), (1 if y0 < y1 else -1)
+        error = dx - dy
+        while True:
+            tile = (x0, y0)
+            if tile not in self.tool_drag_visited:
+                self.tool_drag_visited.add(tile)
                 if self.tool == "move":
-                    self.set_worker_destination(*tile)
-                else:
-                    self.toggle_work_order(self.tool, *tile)
+                    self.tool_drag_last_tile = tile
+                elif self.tool == "road" and tile in self.roads:
+                    self.selected_road_tile = tile
+                elif self.tool in ("clear", "road", "house", "dig"):
+                    self.queue_drag_order(self.tool, x0, y0)
+            if x0 == x1 and y0 == y1:
+                break
+            twice_error = 2 * error
+            if twice_error > -dy:
+                error -= dy
+                x0 += sx
+            if twice_error < dx:
+                error += dx
+                y0 += sy
+
+    def begin_tool_drag(self, pos: Tuple[int, int]) -> None:
+        tile = self.screen_to_tile(*pos)
+        if tile is None:
+            return
+        self.tool_dragging = True
+        self.tool_drag_start_tile = tile
+        self.tool_drag_last_tile = tile
+        self.tool_drag_start_pos = pos
+        self.tool_drag_moved = False
+        self.tool_drag_visited = set()
+
+    def update_tool_drag(self, pos: Tuple[int, int]) -> None:
+        if not self.tool_dragging:
+            return
+        dx = pos[0] - self.tool_drag_start_pos[0]
+        dy = pos[1] - self.tool_drag_start_pos[1]
+        if dx * dx + dy * dy >= 25:
+            self.tool_drag_moved = True
+        if not self.tool_drag_moved or not VIEW_RECT.collidepoint(*pos):
+            return
+        tile = self.screen_to_tile(*pos)
+        if tile is None:
+            return
+        previous = self.tool_drag_last_tile or self.tool_drag_start_tile
+        if previous is not None:
+            self.paint_drag_segment(previous, tile)
+        self.tool_drag_last_tile = tile
+
+    def finish_tool_drag(self, pos: Tuple[int, int]) -> None:
+        if not self.tool_dragging:
+            return
+        self.update_tool_drag(pos)
+        start_tile = self.tool_drag_start_tile
+        moved = self.tool_drag_moved
+        final_tile = self.tool_drag_last_tile
+        if start_tile is not None:
+            if not moved:
+                self.apply_single_tile_click(start_tile)
+            elif self.tool == "move":
+                if final_tile is not None:
+                    self.set_worker_destination(*final_tile)
+            else:
+                self.notify(f"드래그 작업 예약 완료 · 현재 예약 {len(self.work_queue)}개", 2.2)
+        self.tool_dragging = False
+        self.tool_drag_start_tile = None
+        self.tool_drag_last_tile = None
+        self.tool_drag_moved = False
+        self.tool_drag_visited.clear()
 
     def toggle_road_direction(self) -> None:
-        """Switch the road lane between the two isometric grid axes."""
-        self.road_direction = "y" if self.road_direction == "x" else "x"
-        arrow = "↘" if self.road_direction == "x" else "↙"
-        self.notify(f"도로 방향을 {arrow} 축으로 설정했어요. (R 키로 전환)", 2.2)
+        """Rotate a selected, already-installed road tile."""
+        tile = self.selected_road_tile
+        if tile is None or tile not in self.roads:
+            self.notify("방향을 바꿀 기존 도로 타일을 먼저 클릭해 선택하세요.", 2.5)
+            return
+        self.road_directions[tile] = (
+            "y" if self.road_directions.get(tile, "x") == "x" else "x"
+        )
+        axis = "↙" if self.road_directions[tile] == "y" else "↘"
+        self.notify(f"선택한 도로 방향을 {axis} 축으로 90도 회전했어요.", 2.2)
 
     def change_zoom(self, direction: int, mouse_logical: Tuple[int, int]) -> None:
         old_zoom = self.zoom
@@ -1907,16 +2163,24 @@ class CityGame:
         if new_idx == self.zoom_index:
             return
         mx, my = mouse_logical
-        # Keep the tile under the cursor in approximately the same screen position.
+        # Preserve the point under the cursor, including the selected tile's elevation.
+        tile = self.screen_to_tile(mx, my)
+        anchor_height = (
+            self.terrain[tile[0]][tile[1]].height if tile is not None else 0
+        )
         old_tw, old_th = TILE_W * old_zoom, TILE_H * old_zoom
-        dx, dy = mx - self.camera_x, my - self.camera_y
+        dx = mx - self.camera_x
+        dy = my - self.camera_y + anchor_height * ELEVATION_STEP * old_zoom
         a, b = dx / (old_tw / 2), dy / (old_th / 2)
         tx, ty = (a+b)/2, (b-a)/2
         self.zoom_index = new_idx
         self.zoom = ZOOM_LEVELS[self.zoom_index]
         new_tw, new_th = TILE_W * self.zoom, TILE_H * self.zoom
         self.camera_x = mx - (tx-ty) * new_tw / 2
-        self.camera_y = my - (tx+ty) * new_th / 2
+        self.camera_y = (
+            my - (tx+ty) * new_th / 2
+            + anchor_height * ELEVATION_STEP * self.zoom
+        )
     
     def process_events(self) -> None:
         for event in pygame.event.get():
@@ -1976,7 +2240,10 @@ class CityGame:
                 if self.modal_seed:
                     continue
                 if event.button == 1:
-                    self.handle_click(logical)
+                    if VIEW_RECT.collidepoint(*logical):
+                        self.begin_tool_drag(logical)
+                    else:
+                        self.handle_click(logical)
                 elif event.button == 2:
                     self.dragging = True
                     self.last_mouse = logical
@@ -1987,15 +2254,20 @@ class CityGame:
                     if VIEW_RECT.collidepoint(*logical):
                         self.change_zoom(-1, logical)
             elif event.type == pygame.MOUSEBUTTONUP:
-                if event.button == 2:
+                if event.button == 1 and self.tool_dragging:
+                    self.finish_tool_drag(self.logical_mouse(event.pos))
+                elif event.button == 2:
                     self.dragging = False
-            elif event.type == pygame.MOUSEMOTION and self.dragging:
+            elif event.type == pygame.MOUSEMOTION:
                 logical = self.logical_mouse(event.pos)
-                dx = logical[0] - self.last_mouse[0]
-                dy = logical[1] - self.last_mouse[1]
-                self.camera_x += dx
-                self.camera_y += dy
-                self.last_mouse = logical
+                if self.tool_dragging:
+                    self.update_tool_drag(logical)
+                if self.dragging:
+                    dx = logical[0] - self.last_mouse[0]
+                    dy = logical[1] - self.last_mouse[1]
+                    self.camera_x += dx
+                    self.camera_y += dy
+                    self.last_mouse = logical
             elif event.type == pygame.MOUSEWHEEL:
                 logical = self.logical_mouse(pygame.mouse.get_pos())
                 if VIEW_RECT.collidepoint(*logical):
@@ -2003,6 +2275,14 @@ class CityGame:
 
     def update(self, dt: float) -> None:
         self.update_worker(dt)
+        if not self.modal_seed:
+            keys = pygame.key.get_pressed()
+            camera_dx = int(keys[pygame.K_d]) - int(keys[pygame.K_a])
+            camera_dy = int(keys[pygame.K_s]) - int(keys[pygame.K_w])
+            if camera_dx or camera_dy:
+                length = math.hypot(camera_dx, camera_dy)
+                self.camera_x -= (camera_dx / length) * CAMERA_SPEED * dt
+                self.camera_y -= (camera_dy / length) * CAMERA_SPEED * dt
         if self.worker_action_timer > 0:
             self.worker_action_elapsed = min(
                 WORK_ACTION_DURATION,
@@ -2032,6 +2312,10 @@ class CityGame:
         while self.game_minutes >= 24 * 60:
             self.game_minutes -= 24 * 60
             self.day += 1
+            daily_income = self.population * DAILY_INCOME_PER_RESIDENT
+            if daily_income > 0:
+                self.money += daily_income
+                self.notify(f"DAY {self.day} · 주민 세금 수입 +₩{daily_income:,}", 2.4)
         # The first tutorial task is completed by giving the character a destination.
         if not self.tutorial_done and self.tutorial_step == 0 and self.worker_moved and not self.worker_path:
             self.tutorial_step = 1
