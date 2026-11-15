@@ -737,7 +737,7 @@ class CityGame:
             return False
         if (x, y) in self.trees or (x, y) in self.rocks:
             return False
-        if (x, y) in self.roads or (x, y) in self.houses:
+        if (x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines:
             return False
         if (x, y) == (self.worker_x, self.worker_y) and not allow_worker:
             return False
@@ -775,7 +775,7 @@ class CityGame:
             return False
         if (x, y) in self.trees or (x, y) in self.rocks or (x, y) in self.roads:
             return False
-        if (x, y) in self.houses:
+        if (x, y) in self.houses or (x, y) in self.mines:
             return False
         if self.terrain[x][y].terrain == "water":
             return self.has_planned_adjacent_road(x, y)
@@ -1651,7 +1651,7 @@ class CityGame:
             )
 
     def draw_underground_tile(self, x: int, y: int) -> None:
-        """Render a deterministic three-strata cutaway tile for exploration."""
+        """Render the selected geological stratum as a survey view."""
         cx, cy = self.tile_to_screen(x, y)
         tw, th = TILE_W * self.zoom, TILE_H * self.zoom
         layer = max(1, min(3, self.underground_layer))
@@ -1673,28 +1673,18 @@ class CityGame:
                 (round(cx + line_half), round(cy + offset_y)),
                 max(1, round(2.0 * self.zoom))
             )
-        pygame.draw.polygon(self.canvas, (48, 56, 61), points, 1)
 
-        # Seed-based survey marks reveal occasional mineral veins in this slice.
-        amount = self.underground_vein_amount(x, y, layer)
-        mined = (layer, x, y) in self.underground_mined
-        if amount > 0 and self.zoom >= 0.82:
-            ore_color = (72, 76, 73) if mined else (
-                (199, 177, 103) if amount >= 8 else (145, 164, 171)
+        # Geological marks are decorative survey contours, not mineable deposits.
+        mark = (self.seed * 31 + x * 73 + y * 47 + layer * 109) % 17
+        if mark in (0, 1, 2):
+            offset = (mark - 1) * 2 * self.zoom
+            pygame.draw.line(
+                self.canvas, band_colors[2],
+                (round(cx - 5 * self.zoom), round(cy + offset)),
+                (round(cx + 5 * self.zoom), round(cy + offset)),
+                max(1, round(self.zoom))
             )
-            ore_x = round(cx + ((x * 5 + y * 3) % 7 - 3) * self.zoom)
-            ore_y = round(cy + ((x * 2 + y * 7) % 5 - 2) * self.zoom)
-            pygame.draw.rect(
-                self.canvas, ore_color,
-                (ore_x, ore_y, max(2, round(3 * self.zoom)),
-                 max(1, round(2 * self.zoom)))
-            )
-            if not mined:
-                pygame.draw.rect(
-                    self.canvas, (225, 211, 166),
-                    (ore_x + max(1, round(self.zoom)), ore_y,
-                     max(1, round(self.zoom)), max(1, round(self.zoom)))
-                )
+        pygame.draw.polygon(self.canvas, (48, 56, 61), points, 1)
 
     def draw_elevation_cliff_faces(
         self, x: int, y: int, worker_gx: float, worker_gy: float
@@ -1991,6 +1981,57 @@ class CityGame:
                          (round(cx - 6*z), round(base_y - 3*z), max(2, round(4*z)), max(4, round(5*z))))
         pygame.draw.rect(self.canvas, (85, 54, 38),
                          (round(cx + 1*z), round(base_y + 1*z), max(3, round(4*z)), max(8, round(7*z))))
+
+    def draw_mine(self, x: int, y: int) -> None:
+        """Draw a small mine derrick with a layer/progress indicator."""
+        cx, cy = self.tile_to_screen(x, y)
+        z = self.zoom
+        layer, progress = self.mines.get((x, y), (4, 0.0))
+        base_y = cy - 2 * z
+
+        # Stone foundation.
+        foundation = self.diamond(cx, base_y + 5 * z, 17 * z, 8 * z)
+        pygame.draw.polygon(self.canvas, (76, 78, 73), foundation)
+        pygame.draw.polygon(self.canvas, (42, 54, 55), foundation, max(1, round(z)))
+
+        # Timber/steel headframe and cross braces.
+        left_foot = (round(cx - 6 * z), round(base_y + 3 * z))
+        right_foot = (round(cx + 6 * z), round(base_y + 3 * z))
+        left_top = (round(cx - 3 * z), round(base_y - 20 * z))
+        right_top = (round(cx + 3 * z), round(base_y - 20 * z))
+        crown = (round(cx), round(base_y - 24 * z))
+        beam = (105, 91, 69)
+        beam_light = (174, 145, 96)
+        pygame.draw.line(self.canvas, beam, left_foot, left_top, max(2, round(3 * z)))
+        pygame.draw.line(self.canvas, beam, right_foot, right_top, max(2, round(3 * z)))
+        pygame.draw.line(self.canvas, beam_light, left_top, crown, max(2, round(2 * z)))
+        pygame.draw.line(self.canvas, beam_light, crown, right_top, max(2, round(2 * z)))
+        pygame.draw.line(self.canvas, (70, 65, 55), left_top, right_foot, max(1, round(z)))
+        pygame.draw.line(self.canvas, (70, 65, 55), right_top, left_foot, max(1, round(z)))
+        pygame.draw.line(
+            self.canvas, (45, 51, 53),
+            (round(cx), round(base_y - 22 * z)),
+            (round(cx), round(base_y + 3 * z)), max(1, round(z))
+        )
+        pygame.draw.circle(
+            self.canvas, (205, 183, 126), crown,
+            max(2, round(3 * z))
+        )
+
+        # Progress bar: each completed bar moves the site to the next stratum.
+        bar = pygame.Rect(
+            round(cx - 9 * z), round(base_y - 31 * z),
+            max(8, round(18 * z)), max(2, round(3 * z))
+        )
+        pygame.draw.rect(self.canvas, (35, 43, 49), bar)
+        if layer <= 3:
+            fill_w = round(bar.width * clamp(progress / MINE_LAYER_DURATION_MINUTES, 0.0, 1.0))
+            if fill_w:
+                pygame.draw.rect(self.canvas, (125, 190, 121), (bar.x, bar.y, fill_w, bar.height))
+        pygame.draw.rect(self.canvas, (224, 219, 188), bar, 1)
+        layer_label = "완료" if layer > 3 else f"{layer}층"
+        self.text(self.canvas, layer_label, round(cx), round(base_y - 36 * z),
+                  max(7, round(8 * z)), (247, 231, 185), center=True)
 
     def worker_screen_position(self) -> Tuple[float, float]:
         """Return the worker's interpolated screen position, including map rotation."""
@@ -2308,6 +2349,9 @@ class CityGame:
                     if (x, y) in self.houses:
                         rx, ry = self.rotate_grid_position(x, y)
                         depth_items.append(((rx + ry) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, rx, 2, x, y, "house"))
+                    if (x, y) in self.mines:
+                        rx, ry = self.rotate_grid_position(x, y)
+                        depth_items.append(((rx + ry) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, rx, 3, x, y, "mine"))
 
             worker_gx, worker_gy = self.worker_grid_position()
             worker_height = self.terrain[self.worker_x][self.worker_y].height
@@ -2319,7 +2363,7 @@ class CityGame:
             worker_rx, worker_ry = self.rotate_grid_float(worker_gx, worker_gy)
             depth_items.append(((worker_rx + worker_ry) * TILE_H / 2
                                 - worker_height * ELEVATION_STEP,
-                                worker_rx, 3, self.worker_x, self.worker_y, "worker"))
+                                worker_rx, 4, self.worker_x, self.worker_y, "worker"))
             depth_items.sort(key=lambda item: (item[0], item[1], item[2]))
 
             for _depth, _x_order, _kind_order, x, y, kind in depth_items:
@@ -2329,6 +2373,8 @@ class CityGame:
                     self.draw_rock(x, y)
                 elif kind == "house":
                     self.draw_house(x, y)
+                elif kind == "mine":
+                    self.draw_mine(x, y)
                 elif kind == "worker":
                     self.draw_worker()
 
@@ -2341,7 +2387,7 @@ class CityGame:
             self.draw_worker()
             self.text(
                 self.canvas,
-                f"지하 단면 · 지층 {self.underground_layer}/3 · F6 + 클릭: 광맥 채굴 · U: 지상 복귀 · [ ]: 지층 변경",
+                f"지층 조사 화면 · {self.underground_layer}/3층 · 채굴은 지상의 채굴장이 자동 진행 · U: 지상 복귀 · [ ]: 층 변경",
                 12, TOP_H + 5, 9, (224, 218, 187)
             )
             mouse = pygame.mouse.get_pos()
@@ -2351,11 +2397,7 @@ class CityGame:
                 if tile:
                     vx, vy = tile
                     vcx, vcy = self.tile_to_screen(vx, vy)
-                    vein_allowed = (
-                        self.tool == "dig"
-                        and self.can_mine_underground_vein(vx, vy, self.underground_layer)
-                    )
-                    vein_color = C["green"] if vein_allowed else C["red"]
+                    vein_color = C["gold"]
                     pygame.draw.polygon(
                         self.canvas, vein_color,
                         self.diamond(vcx, vcy, TILE_W * self.zoom, TILE_H * self.zoom),
@@ -2380,9 +2422,21 @@ class CityGame:
                     elif self.tool == "road":
                         allowed = self.can_build_road_on(x, y) or (x, y) in self.roads
                     elif self.tool == "clear":
-                        allowed = (x, y) in self.trees or (x, y) in self.rocks
+                        allowed = (
+                            (x, y) in self.trees or (x, y) in self.rocks
+                            or (x, y) in self.roads or (x, y) in self.houses
+                            or (x, y) in self.mines
+                        )
                     elif self.tool == "dig":
                         allowed = self.can_dig_terrain(x, y)
+                    elif self.tool == "mine":
+                        allowed = self.can_build_mine_on(
+                            x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
+                        )
+                    elif self.tool == "restore":
+                        allowed = self.can_restore_terrain(
+                            x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
+                        )
                     else:
                         allowed = self.worker_can_stand(x, y)
                     if self.selected_road_tile == (x, y):
@@ -2404,21 +2458,18 @@ class CityGame:
         self.canvas.set_clip(None)
 
     def draw_work_queue(self, underground_only: bool = False) -> None:
-        """Mark queued work sites, optionally showing only underground mining."""
+        """Mark queued surface work sites; the underground view has no tile jobs."""
+        if underground_only:
+            return
         order_colors = {
             "clear": C["gold"],
             "road": (190, 198, 190),
             "house": (238, 151, 111),
+            "mine": (193, 166, 111),
             "dig": (147, 158, 166),
-            "vein1": (187, 168, 114),
-            "vein2": (157, 168, 179),
-            "vein3": (126, 147, 176),
+            "restore": (114, 190, 139),
         }
-        visible_orders = [
-            order for order in self.work_queue
-            if order[0].startswith("vein") == underground_only
-        ]
-        for index, (tool, x, y) in enumerate(visible_orders, start=1):
+        for index, (tool, x, y) in enumerate(self.work_queue, start=1):
             if not self.is_unlocked(x, y):
                 continue
             color = order_colors.get(tool, C["gold"])
@@ -2518,28 +2569,27 @@ class CityGame:
         self.button(pygame.Rect(573, 5, 29, 21), "저장", small=True)
         self.button(pygame.Rect(605, 5, 31, 21), "불러", small=True)
 
-        # Bottom tool bar.
+        # Compact toolbar: movement, clearing/demolition, construction and terrain tools.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, BOTTOM_Y), (LOGICAL_W, BOTTOM_Y), 1)
-        xs = [8, 78, 148, 218, 288]
+        xs = [5, 58, 111, 164, 217, 270, 323]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
-            self.button(pygame.Rect(xs[i], 294, 66, 23), name, self.tool == key, small=True)
-        # Rotate only a selected road that already exists in the city.
+            self.button(pygame.Rect(xs[i], 294, 50, 23), name, self.tool == key, small=True)
+
         self.button(
-            pygame.Rect(360, 294, 66, 23), "도로 회전 R",
+            pygame.Rect(376, 294, 54, 23), "R 회전",
             self.tool == "road" and self.selected_road_tile is not None,
             small=True
         )
-        # Expansion is a separate utility button and does not replace the tool mode.
         cost_text = "최대" if self.expand_level >= 3 else f"₩{[5000,15000,35000][self.expand_level]:,}"
         self.button(pygame.Rect(434, 294, 80, 23), "땅 확장", small=True)
         self.text(self.canvas, cost_text, 474, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
-        self.text(self.canvas, hint, 10, 327, 9, C["text"])
+        self.text(self.canvas, hint, 10, 327, 8, C["text"])
         self.text(
             self.canvas,
-            "Q/E 지도 회전   C 카메라 추적   U 지하 단면   [ ] 지층 변경",
+            "Q/E 지도 회전   C 카메라 추적   U 지층 조사   [ ] 층 선택",
             10, 344, 8, C["muted"]
         )
 
@@ -2589,12 +2639,12 @@ class CityGame:
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
-                tool_xs = [8, 78, 148, 218, 288]
+                tool_xs = [5, 58, 111, 164, 217, 270, 323]
                 for i, tx in enumerate(tool_xs):
-                    if tx <= x <= tx + 66:
+                    if tx <= x <= tx + 50:
                         self.select_tool(TOOL_KEYS[i])
                         return
-                if 360 <= x <= 426:
+                if 376 <= x <= 430:
                     self.toggle_road_direction()
                     return
             if 434 <= x <= 514 and 294 <= y <= 317:
@@ -2611,38 +2661,33 @@ class CityGame:
         if self.underground_view:
             if self.tool == "move":
                 self.set_worker_destination(x, y)
-            elif self.tool == "dig":
-                self.toggle_work_order(f"vein{self.underground_layer}", x, y)
             else:
-                self.notify("지하에서는 이동 모드 또는 F6 채굴 모드를 사용하세요.", 2.5)
+                self.notify("지층 조사는 보기 전용이에요. 채굴은 지상의 채굴장이 자동으로 진행해요.", 2.5)
             return
         if self.tool == "road" and (x, y) in self.roads:
             self.selected_road_tile = (x, y)
-            self.notify("설치된 도로를 선택했어요. R 또는 [도로 회전]으로 방향을 바꿔요.", 2.5)
+            self.notify("설치된 도로를 선택했어요. R 또는 [R 회전]으로 방향을 바꿔요.", 2.5)
             return
         if self.selected_road_tile != (x, y):
             self.selected_road_tile = None
         if self.tool == "move":
             self.set_worker_destination(x, y)
-        elif self.underground_view and self.tool == "dig":
-            self.toggle_work_order(f"vein{self.underground_layer}", x, y)
         else:
             self.toggle_work_order(self.tool, x, y)
 
     def queue_drag_order(self, tool: str, x: int, y: int) -> None:
-        """Queue one drag-painted tile without toggling existing reservations off."""
-        if self.underground_view and tool != "dig":
+        """Queue one drag-painted surface tile without toggling existing orders."""
+        if self.underground_view or tool == "move":
             return
         if any(order[1] == x and order[2] == y for order in self.work_queue):
             return
         if len(self.work_queue) >= MAX_WORK_QUEUE:
             return
-        order_tool = f"vein{self.underground_layer}" if self.underground_view and tool == "dig" else tool
-        valid, _reason = self.can_reserve_work_order(order_tool, x, y)
+        valid, _reason = self.can_reserve_work_order(tool, x, y)
         if not valid:
             return
-        self.work_queue.append((order_tool, x, y))
-        if order_tool == "road":
+        self.work_queue.append((tool, x, y))
+        if tool == "road":
             self.road_directions[(x, y)] = self.infer_road_axis(x, y)
 
     def paint_drag_segment(
@@ -2662,7 +2707,7 @@ class CityGame:
                     self.tool_drag_last_tile = tile
                 elif self.tool == "road" and tile in self.roads:
                     self.selected_road_tile = tile
-                elif self.tool in ("clear", "road", "house", "dig"):
+                elif self.tool in ("clear", "road", "house", "dig", "mine", "restore"):
                     self.queue_drag_order(self.tool, x0, y0)
             if x0 == x1 and y0 == y1:
                 break
@@ -2795,6 +2840,10 @@ class CityGame:
                         self.select_tool("house")
                     elif event.key == pygame.K_F6:
                         self.select_tool("dig")
+                    elif event.key == pygame.K_F7:
+                        self.select_tool("mine")
+                    elif event.key == pygame.K_F8:
+                        self.select_tool("restore")
                     elif event.key == pygame.K_r:
                         self.toggle_road_direction()
                     elif event.key == pygame.K_q:
@@ -2812,7 +2861,8 @@ class CityGame:
                     elif event.key == pygame.K_u:
                         self.underground_view = not self.underground_view
                         self.notify(
-                            "지하 단면 보기" if self.underground_view else "지상 보기", 2
+                            "지층 조사 보기 · 채굴장은 자동으로 지층을 채굴해요."
+                            if self.underground_view else "지상 보기", 2
                         )
                     elif event.key == pygame.K_LEFTBRACKET:
                         self.underground_layer = max(1, self.underground_layer - 1)
@@ -2832,6 +2882,10 @@ class CityGame:
                         self.select_tool("house")
                     elif event.key == pygame.K_5:
                         self.select_tool("dig")
+                    elif event.key == pygame.K_6:
+                        self.select_tool("mine")
+                    elif event.key == pygame.K_7:
+                        self.select_tool("restore")
                     elif event.key == pygame.K_F5:
                         self.save_game()
                     elif event.key == pygame.K_F9:
