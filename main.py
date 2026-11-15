@@ -1778,7 +1778,7 @@ class CityGame:
         self.draw_elevation_cliffs()
         self.draw_worker_path_preview()
 
-        depth_items: List[Tuple[float, float, int, int, int, str]] =
+        depth_items: List[Tuple[float, float, int, int, int, str]] = []
         for x in range(MAP_W):
             for y in range(MAP_H):
                 if not self.is_unlocked(x, y):
