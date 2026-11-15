@@ -317,6 +317,7 @@ class CityGame:
         self.tool = tool
         if changed:
             self.close_build_palette()
+            self.selected_structure_anchor = None
         if changed:
             mode_name = TOOL_NAMES[TOOL_KEYS.index(tool)].split(" ", 1)[1]
             self.notify(f"{mode_name} 모드", 1.2)
@@ -2587,6 +2588,22 @@ class CityGame:
             pygame.draw.rect(self.canvas, (211, 194, 115),
                              (round(cx - 2*z), round(ground_y - height_px - 8*z),
                               max(4, round(5*z)), max(4, round(5*z))))
+        elif kind == "logging":
+            progress = self.logging_progress.get((x, y), 0.0)
+            bar = pygame.Rect(
+                round(cx - 9*z), round(ground_y - height_px - 12*z),
+                max(8, round(18*z)), max(2, round(3*z))
+            )
+            pygame.draw.rect(self.canvas, (37, 43, 42), bar)
+            fill_w = round(
+                bar.width * clamp(progress / LUMBER_CAMP_DURATION_MINUTES, 0.0, 1.0)
+            )
+            if fill_w:
+                pygame.draw.rect(
+                    self.canvas, (124, 187, 106),
+                    (bar.x, bar.y, fill_w, bar.height)
+                )
+            pygame.draw.rect(self.canvas, (224, 219, 188), bar, 1)
 
     def draw_mine(self, x: int, y: int) -> None:
         """Draw a small mine derrick with a layer/progress indicator."""
@@ -3000,6 +3017,20 @@ class CityGame:
                         )
                 elif kind == "worker":
                     self.draw_worker()
+
+            if self.selected_structure_anchor is not None:
+                selected = self.city_object_at(*self.selected_structure_anchor)
+                if selected is not None:
+                    selected_anchor, selected_kind, _selected_level = selected
+                    for sx, sy in self.footprint_for(selected_kind, *selected_anchor):
+                        scx, scy = self.tile_to_screen(sx, sy)
+                        outline = self.diamond(
+                            scx, scy, TILE_W*self.zoom*0.96, TILE_H*self.zoom*0.96
+                        )
+                        pygame.draw.polygon(
+                            self.canvas, C["gold"], outline,
+                            max(1, round(1.5*self.zoom))
+                        )
 
             self.draw_work_queue()
 
