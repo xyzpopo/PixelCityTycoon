@@ -870,6 +870,7 @@ class CityGame:
     def can_build_city_object(
         self, kind: str, x: int, y: int, allow_worker: bool = False,
         ignore_order: Optional[Tuple[str, int, int]] = None,
+        require_forest: bool = True,
     ) -> bool:
         """Validate an entire multi-tile footprint, not just its anchor tile."""
         spec = CITY_OBJECT_DEFS.get(kind)
@@ -906,7 +907,7 @@ class CityGame:
 
         if spec["road"] and not self.footprint_has_road(footprint):
             return False
-        if kind == "logging":
+        if kind == "logging" and require_forest:
             nearby_trees = {
                 tree for tree in self.trees
                 if min(abs(tree[0] - tx) + abs(tree[1] - ty) for tx, ty in footprint) <= 5
@@ -1936,7 +1937,7 @@ class CityGame:
                             or entry[2] not in CITY_OBJECT_DEFS or type(entry[3]) is not int):
                         continue
                     x, y, kind, level = entry
-                    if self.can_build_city_object(kind, x, y):
+                    if self.can_build_city_object(kind, x, y, require_forest=False):
                         self.city_objects[(x, y)] = {
                             "type": kind, "level": int(clamp(level, 1, 3))
                         }
@@ -2461,9 +2462,10 @@ class CityGame:
         width, height = int(spec["w"]), int(spec["h"])
         z = self.zoom
         tw, th = TILE_W * z, TILE_H * z
-        ax, ay = self.tile_to_screen(x, y)
-        cx = ax + ((width - 1) - (height - 1)) * tw / 2
-        ground_y = ay + ((width - 1) + (height - 1)) * th / 2
+        footprint = self.footprint_for(kind, x, y)
+        screen_centers = [self.tile_to_screen(tx, ty) for tx, ty in footprint]
+        cx = sum(point[0] for point in screen_centers) / len(screen_centers)
+        ground_y = sum(point[1] for point in screen_centers) / len(screen_centers)
         half_w = (width + height) * tw / 4
         half_h = (width + height) * th / 4
         ground = [
@@ -3493,13 +3495,17 @@ class CityGame:
                             if self.underground_view else "지상 보기", 2
                         )
                     elif event.key == pygame.K_LEFTBRACKET:
-                        self.underground_layer = max(1, self.underground_layer - 1)
                         if self.underground_view:
+                            self.underground_layer = max(1, self.underground_layer - 1)
                             self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
+                        elif self.tool == "house":
+                            self.cycle_building_type(-1)
                     elif event.key == pygame.K_RIGHTBRACKET:
-                        self.underground_layer = min(3, self.underground_layer + 1)
                         if self.underground_view:
+                            self.underground_layer = min(3, self.underground_layer + 1)
                             self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
+                        elif self.tool == "house":
+                            self.cycle_building_type(1)
                     elif event.key == pygame.K_1:
                         self.select_tool("move")
                     elif event.key == pygame.K_2:
