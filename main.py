@@ -316,6 +316,8 @@ class CityGame:
         changed = self.tool != tool
         self.tool = tool
         if changed:
+            self.close_build_palette()
+        if changed:
             mode_name = TOOL_NAMES[TOOL_KEYS.index(tool)].split(" ", 1)[1]
             self.notify(f"{mode_name} 모드", 1.2)
 
@@ -3043,6 +3045,8 @@ class CityGame:
         self.text(self.canvas, cost_text, 474, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
+        if self.tool == "house":
+            hint = "건설: 빈 땅 클릭 → 건물 선택 → 건물 위에서 마우스를 놓아 예약 · G 업그레이드"
         self.text(self.canvas, hint, 10, 327, 8, C["text"])
         self.text(
             self.canvas,
@@ -3060,6 +3064,7 @@ class CityGame:
 
         if self.modal_seed:
             self.draw_seed_modal()
+        self.draw_build_palette()
 
     def draw_seed_modal(self) -> None:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
@@ -3120,6 +3125,9 @@ class CityGame:
                 self.set_worker_destination(x, y)
             else:
                 self.notify("지층 조사는 보기 전용이에요. 채굴은 지상의 채굴장이 자동으로 진행해요.", 2.5)
+            return
+        if self.tool == "house":
+            self.open_build_palette((x, y))
             return
         if self.tool == "road" and (x, y) in self.roads:
             self.selected_road_tile = (x, y)
@@ -3286,7 +3294,12 @@ class CityGame:
                         self.seed_text += event.unicode
                 else:
                     if event.key == pygame.K_ESCAPE:
-                        self.running = False
+                        if self.build_palette_open:
+                            self.close_build_palette()
+                        else:
+                            self.running = False
+                    elif event.key == pygame.K_g:
+                        self.upgrade_selected_structure()
                     elif event.key == pygame.K_F1:
                         self.select_tool("move")
                     elif event.key == pygame.K_F2:
@@ -3356,8 +3369,21 @@ class CityGame:
                 if self.modal_seed:
                     continue
                 if event.button == 1:
+                    if self.build_palette_open:
+                        hit = self.build_palette_hit_test(logical)
+                        if hit is not None:
+                            self.build_palette_dragging = True
+                            self.build_palette_pressed_index = hit
+                            self.build_palette_hover_index = hit
+                            continue
+                        self.close_build_palette()
                     if VIEW_RECT.collidepoint(*logical):
-                        self.begin_tool_drag(logical)
+                        if self.tool == "house" and not self.underground_view:
+                            tile = self.screen_to_tile(*logical)
+                            if tile is not None:
+                                self.open_build_palette(tile)
+                        else:
+                            self.begin_tool_drag(logical)
                     else:
                         self.handle_click(logical)
                 elif event.button == 2:
@@ -3371,12 +3397,23 @@ class CityGame:
                     if VIEW_RECT.collidepoint(*logical):
                         self.change_zoom(-1, logical)
             elif event.type == pygame.MOUSEBUTTONUP:
-                if event.button == 1 and self.tool_dragging:
-                    self.finish_tool_drag(self.logical_mouse(event.pos))
+                logical = self.logical_mouse(event.pos)
+                if event.button == 1 and self.build_palette_dragging:
+                    hit = self.build_palette_hit_test(logical)
+                    if hit is not None:
+                        self.choose_building_from_palette(hit)
+                    else:
+                        self.build_palette_dragging = False
+                        self.build_palette_pressed_index = None
+                        self.build_palette_hover_index = None
+                elif event.button == 1 and self.tool_dragging:
+                    self.finish_tool_drag(logical)
                 elif event.button == 2:
                     self.dragging = False
             elif event.type == pygame.MOUSEMOTION:
                 logical = self.logical_mouse(event.pos)
+                if self.build_palette_open:
+                    self.build_palette_hover_index = self.build_palette_hit_test(logical)
                 if self.tool_dragging:
                     self.update_tool_drag(logical)
                 if self.dragging:
