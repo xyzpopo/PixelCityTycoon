@@ -1186,8 +1186,12 @@ class CityGame:
     # ------------------------------------------------------------------
     def save_game(self) -> None:
         data = {
-            "version": 7,
+            "version": 8,
             "seed": self.seed,
+            "map_rotation": self.map_rotation,
+            "camera_follow_worker": self.camera_follow_worker,
+            "underground_view": self.underground_view,
+            "underground_layer": self.underground_layer,
             "trees": [list(p) for p in sorted(self.trees)],
             "rocks": [list(p) for p in sorted(self.rocks)],
             "roads": [list(p) for p in sorted(self.roads)],
@@ -1228,6 +1232,12 @@ class CityGame:
         try:
             data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
             self.generate_world(int(data["seed"]))
+            saved_rotation = data.get("map_rotation", 0)
+            self.map_rotation = saved_rotation % 4 if type(saved_rotation) is int else 0
+            self.camera_follow_worker = bool(data.get("camera_follow_worker", False))
+            self.underground_view = bool(data.get("underground_view", False))
+            saved_layer = data.get("underground_layer", 1)
+            self.underground_layer = int(clamp(saved_layer, 1, 3)) if type(saved_layer) is int else 1
             saved_heights = data.get("terrain_heights")
             if isinstance(saved_heights, list) and len(saved_heights) == MAP_W:
                 for x, column in enumerate(saved_heights):
@@ -1318,6 +1328,8 @@ class CityGame:
             self.tutorial_roads = int(data.get("tutorial_roads", 0))
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
             self.center_camera()
+            if self.camera_follow_worker:
+                self.center_camera_on_worker()
             self.notify("저장된 도시를 불러왔어요.", 3)
         except FileNotFoundError:
             self.notify("저장 파일이 없어요. 먼저 저장해 주세요.", 3)
@@ -2045,7 +2057,7 @@ class CityGame:
                     self.terrain[nx][ny].height - worker_height
                 ) * clamp(self.worker_move_progress, 0.0, 1.0)
             worker_rx, worker_ry = self.rotate_grid_float(worker_gx, worker_gy)
-        depth_items.append(((worker_rx + worker_ry) * TILE_H / 2
+            depth_items.append(((worker_rx + worker_ry) * TILE_H / 2
                                 - worker_height * ELEVATION_STEP,
                                 worker_rx, 3, self.worker_x, self.worker_y, "worker"))
             depth_items.sort(key=lambda item: (item[0], item[1], item[2]))
@@ -2234,6 +2246,11 @@ class CityGame:
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
         self.text(self.canvas, hint, 10, 327, 9, C["text"])
+        self.text(
+            self.canvas,
+            "Q/E 지도 회전   C 카메라 추적   U 지하 단면   [ ] 지층 변경",
+            10, 344, 8, C["muted"]
+        )
 
         if time.time() < self.notice_until:
             msg = self.notice
@@ -2425,17 +2442,15 @@ class CityGame:
         anchor_height = (
             self.terrain[tile[0]][tile[1]].height if tile is not None else 0
         )
-        old_tw, old_th = TILE_W * old_zoom, TILE_H * old_zoom
-        dx = mx - self.camera_x
-        dy = my - self.camera_y + anchor_height * ELEVATION_STEP * old_zoom
-        a, b = dx / (old_tw / 2), dy / (old_th / 2)
-        tx, ty = (a+b)/2, (b-a)/2
+        anchor_rx, anchor_ry = (
+            self.rotate_grid_position(tile[0], tile[1]) if tile is not None else (0.0, 0.0)
+        )
         self.zoom_index = new_idx
         self.zoom = ZOOM_LEVELS[self.zoom_index]
         new_tw, new_th = TILE_W * self.zoom, TILE_H * self.zoom
-        self.camera_x = mx - (tx-ty) * new_tw / 2
+        self.camera_x = mx - (anchor_rx - anchor_ry) * new_tw / 2
         self.camera_y = (
-            my - (tx+ty) * new_th / 2
+            my - (anchor_rx + anchor_ry) * new_th / 2
             + anchor_height * ELEVATION_STEP * self.zoom
         )
     
@@ -2478,6 +2493,31 @@ class CityGame:
                         self.select_tool("dig")
                     elif event.key == pygame.K_r:
                         self.toggle_road_direction()
+                    elif event.key == pygame.K_q:
+                        self.rotate_map(-1)
+                    elif event.key == pygame.K_e:
+                        self.rotate_map(1)
+                    elif event.key == pygame.K_c:
+                        self.camera_follow_worker = not self.camera_follow_worker
+                        if self.camera_follow_worker:
+                            self.center_camera_on_worker()
+                        self.notify(
+                            "작업자 카메라 추적 켜짐" if self.camera_follow_worker
+                            else "작업자 카메라 추적 꺼짐", 2
+                        )
+                    elif event.key == pygame.K_u:
+                        self.underground_view = not self.underground_view
+                        self.notify(
+                            "지하 단면 보기" if self.underground_view else "지상 보기", 2
+                        )
+                    elif event.key == pygame.K_LEFTBRACKET:
+                        self.underground_layer = max(1, self.underground_layer - 1)
+                        if self.underground_view:
+                            self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
+                    elif event.key == pygame.K_RIGHTBRACKET:
+                        self.underground_layer = min(3, self.underground_layer + 1)
+                        if self.underground_view:
+                            self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
                     elif event.key == pygame.K_1:
                         self.select_tool("move")
                     elif event.key == pygame.K_2:
@@ -2503,6 +2543,7 @@ class CityGame:
                         self.handle_click(logical)
                 elif event.button == 2:
                     self.dragging = True
+                    self.camera_follow_worker = False
                     self.last_mouse = logical
                 elif event.button == 4:
                     if VIEW_RECT.collidepoint(*logical):
@@ -2537,9 +2578,14 @@ class CityGame:
             camera_dx = int(keys[pygame.K_d]) - int(keys[pygame.K_a])
             camera_dy = int(keys[pygame.K_s]) - int(keys[pygame.K_w])
             if camera_dx or camera_dy:
+                if self.camera_follow_worker:
+                    self.camera_follow_worker = False
+                    self.notify("수동 카메라 이동으로 추적을 껐어요.", 1.8)
                 length = math.hypot(camera_dx, camera_dy)
                 self.camera_x -= (camera_dx / length) * CAMERA_SPEED * dt
                 self.camera_y -= (camera_dy / length) * CAMERA_SPEED * dt
+            elif self.camera_follow_worker:
+                self.center_camera_on_worker()
         if self.worker_action_timer > 0:
             self.worker_action_elapsed = min(
                 WORK_ACTION_DURATION,
