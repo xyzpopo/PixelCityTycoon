@@ -468,10 +468,34 @@ class CityGame:
     def center_camera(self) -> None:
         cx = MAP_W // 2
         cy = MAP_H // 2
-        world_x = (cx - cy) * (TILE_W * self.zoom / 2)
-        world_y = (cx + cy) * (TILE_H * self.zoom / 2)
+        rx, ry = self.rotate_grid_position(cx, cy)
+        world_x = (rx - ry) * (TILE_W * self.zoom / 2)
+        world_y = (rx + ry) * (TILE_H * self.zoom / 2)
         self.camera_x = VIEW_RECT.centerx - world_x
         self.camera_y = VIEW_RECT.centery - world_y
+
+    def center_camera_on_worker(self) -> None:
+        """Keep the moving worker centered when camera-follow mode is enabled."""
+        wx, wy = self.worker_grid_position()
+        rx, ry = self.rotate_grid_float(wx, wy)
+        height = self.terrain[self.worker_x][self.worker_y].height
+        if self.worker_path:
+            nx, ny = self.worker_path[0]
+            next_height = self.terrain[nx][ny].height
+            height += (next_height - height) * clamp(self.worker_move_progress, 0.0, 1.0)
+        tw, th = TILE_W * self.zoom, TILE_H * self.zoom
+        self.camera_x = VIEW_RECT.centerx - (rx - ry) * tw / 2
+        self.camera_y = (
+            VIEW_RECT.centery - (rx + ry) * th / 2
+            + height * ELEVATION_STEP * self.zoom
+        )
+
+    def rotate_map(self, turns: int) -> None:
+        """Rotate the entire isometric map in 90-degree steps."""
+        self.map_rotation = (self.map_rotation + turns) % 4
+        if self.camera_follow_worker:
+            self.center_camera_on_worker()
+        self.notify(f"지도 회전: {self.map_rotation * 90}도", 1.8)
 
     def unlocked_bounds(self) -> Tuple[int, int, int, int]:
         radii = [6, 10, 14, 18]
@@ -1382,6 +1406,43 @@ class CityGame:
                 max(1, round(self.zoom))
             )
 
+    def draw_underground_tile(self, x: int, y: int) -> None:
+        """Render a deterministic three-strata cutaway tile for exploration."""
+        cx, cy = self.tile_to_screen(x, y)
+        tw, th = TILE_W * self.zoom, TILE_H * self.zoom
+        layer = max(1, min(3, self.underground_layer))
+        palettes = {
+            1: ((132, 103, 73), (116, 88, 63), (96, 74, 57)),
+            2: ((105, 111, 105), (86, 94, 94), (69, 78, 83)),
+            3: ((75, 87, 98), (62, 73, 86), (49, 60, 75)),
+        }
+        band_colors = palettes[layer]
+        points = self.diamond(cx, cy, tw, th)
+        pygame.draw.polygon(self.canvas, band_colors[0], points)
+        for index, color in enumerate(band_colors[1:], start=1):
+            fraction = index / 3.0
+            offset_y = (fraction - 0.5) * th
+            line_half = tw * 0.5 * (1.0 - abs(fraction - 0.5) * 2.0)
+            pygame.draw.line(
+                self.canvas, color,
+                (round(cx - line_half), round(cy + offset_y)),
+                (round(cx + line_half), round(cy + offset_y)),
+                max(1, round(2.0 * self.zoom))
+            )
+        pygame.draw.polygon(self.canvas, (48, 56, 61), points, 1)
+
+        # Seed-based survey marks reveal occasional mineral veins in this slice.
+        ore_roll = (self.seed * 31 + x * 73 + y * 47 + layer * 109) % 53
+        if ore_roll < 4 and self.zoom >= 0.82:
+            ore_color = (199, 177, 103) if ore_roll in (0, 1) else (145, 164, 171)
+            ore_x = round(cx + ((x * 5 + y * 3) % 7 - 3) * self.zoom)
+            ore_y = round(cy + ((x * 2 + y * 7) % 5 - 2) * self.zoom)
+            pygame.draw.rect(
+                self.canvas, ore_color,
+                (ore_x, ore_y, max(2, round(3 * self.zoom)),
+                 max(1, round(2 * self.zoom)))
+            )
+
     def draw_elevation_cliff_faces(
         self, x: int, y: int, worker_gx: float, worker_gy: float
     ) -> None:
@@ -1668,17 +1729,16 @@ class CityGame:
                          (round(cx + 1*z), round(base_y + 1*z), max(3, round(4*z)), max(8, round(7*z))))
 
     def worker_screen_position(self) -> Tuple[float, float]:
-        """Return the worker's interpolated world position during a step."""
-        wx, wy = self.worker_grid_position()
-        tw, th = TILE_W * self.zoom, TILE_H * self.zoom
-        height = self.terrain[self.worker_x][self.worker_y].height
-        if self.worker_path:
-            nx, ny = self.worker_path[0]
-            next_height = self.terrain[nx][ny].height
-            height += (next_height - height) * clamp(self.worker_move_progress, 0.0, 1.0)
-        return ((wx - wy) * tw / 2 + self.camera_x,
-                (wx + wy) * th / 2 + self.camera_y
-                - height * ELEVATION_STEP * self.zoom)
+        """Return the worker's interpolated screen position, including map rotation."""
+        current = self.tile_to_screen(self.worker_x, self.worker_y)
+        if not self.worker_path:
+            return current
+        next_point = self.tile_to_screen(*self.worker_path[0])
+        progress = clamp(self.worker_move_progress, 0.0, 1.0)
+        return (
+            current[0] + (next_point[0] - current[0]) * progress,
+            current[1] + (next_point[1] - current[1]) * progress,
+        )
 
     def draw_worker(self) -> None:
         """Draw the worker with four facing directions and timed work frames."""
@@ -1897,13 +1957,20 @@ class CityGame:
         # is composited before the next foreground tile is drawn.
         worker_gx, worker_gy = self.worker_grid_position()
         for depth in range(MAP_W + MAP_H - 1):
-            for x in range(MAP_W):
-                y = depth - x
-                if not (0 <= y < MAP_H) or not self.is_unlocked(x, y):
+            for rx in range(MAP_W):
+                ry = depth - rx
+                if not (0 <= ry < MAP_H):
+                    continue
+                x, y = self.unrotate_grid_position(rx, ry)
+                if not self.is_unlocked(x, y):
                     continue
 
                 cx, cy = self.tile_to_screen(x, y)
                 if cx < -80 or cx > LOGICAL_W + 80 or cy < TOP_H - 100 or cy > BOTTOM_Y + 50:
+                    continue
+
+                if self.underground_view:
+                    self.draw_underground_tile(x, y)
                     continue
 
                 self.draw_tile(x, y)
@@ -1944,83 +2011,97 @@ class CityGame:
                         (bottom[0], bottom[1] + wall_depth), 1
                     )
 
-        # Roads sit above the terrain tops; each tile's center markings use
-        # its real orthogonal neighbor mask.
-        for x, y in self.roads:
-            if self.is_unlocked(x, y):
-                cx, cy = self.tile_to_screen(x, y)
-                if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
-                    self.draw_road(x, y)
+        if not self.underground_view:
+            # Roads sit above the terrain tops; each tile's center markings use
+            # its real orthogonal neighbor mask.
+            for x, y in self.roads:
+                if self.is_unlocked(x, y):
+                    cx, cy = self.tile_to_screen(x, y)
+                    if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
+                        self.draw_road(x, y)
 
-        self.draw_worker_path_preview()
+            self.draw_worker_path_preview()
 
-        depth_items: List[Tuple[float, float, int, int, int, str]] = []
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                if not self.is_unlocked(x, y):
-                    continue
-                if (x, y) in self.trees:
-                    depth_items.append(((x + y) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, x, 0, x, y, "tree"))
-                if (x, y) in self.rocks:
-                    depth_items.append(((x + y) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, x, 1, x, y, "rock"))
-                if (x, y) in self.houses:
-                    depth_items.append(((x + y) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, x, 2, x, y, "house"))
+            depth_items: List[Tuple[float, float, int, int, int, str]] = []
+            for x in range(MAP_W):
+                for y in range(MAP_H):
+                    if not self.is_unlocked(x, y):
+                        continue
+                    if (x, y) in self.trees:
+                        rx, ry = self.rotate_grid_position(x, y)
+                        depth_items.append(((rx + ry) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, rx, 0, x, y, "tree"))
+                    if (x, y) in self.rocks:
+                        rx, ry = self.rotate_grid_position(x, y)
+                        depth_items.append(((rx + ry) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, rx, 1, x, y, "rock"))
+                    if (x, y) in self.houses:
+                        rx, ry = self.rotate_grid_position(x, y)
+                        depth_items.append(((rx + ry) * TILE_H / 2 - self.terrain[x][y].height * ELEVATION_STEP, rx, 2, x, y, "house"))
 
-        worker_gx, worker_gy = self.worker_grid_position()
-        worker_height = self.terrain[self.worker_x][self.worker_y].height
-        if self.worker_path:
-            nx, ny = self.worker_path[0]
-            worker_height += (
-                self.terrain[nx][ny].height - worker_height
-            ) * clamp(self.worker_move_progress, 0.0, 1.0)
-        depth_items.append(((worker_gx + worker_gy) * TILE_H / 2
-                            - worker_height * ELEVATION_STEP,
-                            worker_gx, 3, self.worker_x, self.worker_y, "worker"))
-        depth_items.sort(key=lambda item: (item[0], item[1], item[2]))
+            worker_gx, worker_gy = self.worker_grid_position()
+            worker_height = self.terrain[self.worker_x][self.worker_y].height
+            if self.worker_path:
+                nx, ny = self.worker_path[0]
+                worker_height += (
+                    self.terrain[nx][ny].height - worker_height
+                ) * clamp(self.worker_move_progress, 0.0, 1.0)
+            worker_rx, worker_ry = self.rotate_grid_float(worker_gx, worker_gy)
+        depth_items.append(((worker_rx + worker_ry) * TILE_H / 2
+                                - worker_height * ELEVATION_STEP,
+                                worker_rx, 3, self.worker_x, self.worker_y, "worker"))
+            depth_items.sort(key=lambda item: (item[0], item[1], item[2]))
 
-        for _depth, _x_order, _kind_order, x, y, kind in depth_items:
-            if kind == "tree":
-                self.draw_tree(x, y)
-            elif kind == "rock":
-                self.draw_rock(x, y)
-            elif kind == "house":
-                self.draw_house(x, y)
-            elif kind == "worker":
-                self.draw_worker()
+            for _depth, _x_order, _kind_order, x, y, kind in depth_items:
+                if kind == "tree":
+                    self.draw_tree(x, y)
+                elif kind == "rock":
+                    self.draw_rock(x, y)
+                elif kind == "house":
+                    self.draw_house(x, y)
+                elif kind == "worker":
+                    self.draw_worker()
 
-        self.draw_work_queue()
+            self.draw_work_queue()
 
-        # Tile cursor / placement preview.
-        mouse = pygame.mouse.get_pos()
-        mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
-        if VIEW_RECT.collidepoint(mx, my):
-            tile = self.screen_to_tile(mx, my)
-            if tile:
-                x, y = tile
-                cx, cy = self.tile_to_screen(x, y)
-                pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
-                if self.tool == "house":
-                    allowed = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
-                elif self.tool == "road":
-                    allowed = self.can_build_on(x, y) or (x, y) in self.roads
-                elif self.tool == "clear":
-                    allowed = (x, y) in self.trees or (x, y) in self.rocks
-                elif self.tool == "dig":
-                    allowed = self.can_dig_terrain(x, y)
-                else:
-                    allowed = self.worker_can_stand(x, y)
-                if self.selected_road_tile == (x, y):
-                    color = C["gold"]
-                elif any(order[1] == x and order[2] == y for order in self.work_queue):
-                    color = C["gold"]
-                else:
-                    color = C["green"] if allowed else C["red"]
-                pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
-                if self.tool == "road" and allowed and (x, y) not in self.roads:
-                    pygame.draw.circle(
-                        self.canvas, C["road_center"],
-                        (round(cx), round(cy)), max(2, round(2 * self.zoom))
-                    )
+        else:
+            self.text(
+                self.canvas,
+                f"지하 단면 · 지층 {self.underground_layer}/3 · U: 지상 복귀 · [ ]: 지층 변경",
+                12, TOP_H + 5, 10, (224, 218, 187)
+            )
+
+        if not self.underground_view:
+            # Tile cursor / placement preview.
+            mouse = pygame.mouse.get_pos()
+            mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+            if VIEW_RECT.collidepoint(mx, my):
+                tile = self.screen_to_tile(mx, my)
+                if tile:
+                    x, y = tile
+                    cx, cy = self.tile_to_screen(x, y)
+                    pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
+                    if self.tool == "house":
+                        allowed = self.can_build_on(x, y) and self.has_planned_adjacent_road(x, y)
+                    elif self.tool == "road":
+                        allowed = self.can_build_on(x, y) or (x, y) in self.roads
+                    elif self.tool == "clear":
+                        allowed = (x, y) in self.trees or (x, y) in self.rocks
+                    elif self.tool == "dig":
+                        allowed = self.can_dig_terrain(x, y)
+                    else:
+                        allowed = self.worker_can_stand(x, y)
+                    if self.selected_road_tile == (x, y):
+                        color = C["gold"]
+                    elif any(order[1] == x and order[2] == y for order in self.work_queue):
+                        color = C["gold"]
+                    else:
+                        color = C["green"] if allowed else C["red"]
+                    pygame.draw.polygon(self.canvas, color, pts, max(1, round(1.2*self.zoom)))
+                    if self.tool == "road" and allowed and (x, y) not in self.roads:
+                        pygame.draw.circle(
+                            self.canvas, C["road_center"],
+                            (round(cx), round(cy)), max(2, round(2 * self.zoom))
+                        )
+
 
         # Tutorial card.
         self.draw_tutorial_card()
