@@ -992,14 +992,17 @@ class CityGame:
         self.toggle_work_order(kind, *anchor)
 
     def draw_build_palette(self) -> None:
-        """Render the floating, hoverable nine-item building selector."""
+        """Render the floating building selector with live costs and hover feedback."""
         if not self.build_palette_open:
             return
         panel, cells = self.build_palette_geometry()
         pygame.draw.rect(self.canvas, (24, 32, 37), panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
-        self.text(self.canvas, "건설할 건물 선택 · 놓으면 예약", panel.centerx,
-                  panel.y + 12, 9, C["gold"], center=True)
+        self.text(
+            self.canvas, "건설 종류 선택 · 원하는 항목 위에서 놓기",
+            panel.centerx, panel.y + 12, 9, C["gold"], center=True
+        )
+
         for index, (_kind, label, size) in enumerate(BUILD_MENU_ITEMS):
             rect = cells[index]
             active = index == self.build_palette_hover_index
@@ -1013,8 +1016,28 @@ class CityGame:
                       9, text_color, center=True)
             self.text(self.canvas, size, rect.centerx, rect.y + 21,
                       7, sub_color, center=True)
-        self.text(self.canvas, "취소: ESC 또는 메뉴 밖 클릭", panel.centerx,
-                  panel.bottom - 7, 7, C["muted"], center=True)
+
+        if self.build_palette_hover_index is None:
+            footer = "취소: ESC · 빈 곳 클릭"
+            footer_color = C["muted"]
+        else:
+            kind = BUILD_MENU_ITEMS[self.build_palette_hover_index][0]
+            money, wood, stone = self.order_costs(
+                kind, *(self.build_palette_anchor or (self.worker_x, self.worker_y))
+            )
+            valid, reason = self.can_reserve_work_order(
+                kind, *(self.build_palette_anchor or (self.worker_x, self.worker_y))
+            )
+            if valid:
+                footer = f"₩{money:,} · 목재 {wood} · 석재 {stone}"
+                footer_color = C["green"]
+            else:
+                footer = reason
+                footer_color = C["red"]
+        self.text(
+            self.canvas, footer, panel.centerx, panel.bottom - 7,
+            7, footer_color, center=True
+        )
 
     def upgrade_selected_structure(self) -> None:
         """Upgrade a selected home or city building up to level three."""
@@ -3175,12 +3198,17 @@ class CityGame:
         pygame.draw.line(self.canvas, (111, 130, 122), (0, TOP_H-1), (LOGICAL_W, TOP_H-1), 1)
         self.text(self.canvas, "PIXEL CITY", 8, 5, 13, C["gold"])
         self.text(self.canvas, f"₩{self.money:,}", 132, 6, 11, C["white"])
-        self.text(self.canvas, f"인구 {self.population}", 230, 7, 10, C["text"])
-        self.text(self.canvas, f"목재 {self.wood}", 302, 7, 9, C["muted"])
-        self.text(self.canvas, f"석재 {self.stone}", 359, 7, 9, C["muted"])
-        self.text(self.canvas, f"+₩{self.population * DAILY_INCOME_PER_RESIDENT:,}/일",
-                  410, 7, 9, C["green"])
-        self.text(self.canvas, f"DAY {self.day}", 490, 7, 9, C["muted"])
+        self.text(self.canvas, f"인구 {self.population}", 210, 7, 9, C["text"])
+        self.text(self.canvas, f"일자리 {self.available_city_jobs()}", 270, 7, 8, C["muted"])
+        self.text(self.canvas, f"목재 {self.wood}", 326, 7, 9, C["muted"])
+        self.text(self.canvas, f"석재 {self.stone}", 378, 7, 9, C["muted"])
+        tax_income, business_income, maintenance = self.calculate_daily_city_finances()
+        daily_net = tax_income + business_income - maintenance
+        income_color = C["green"] if daily_net >= 0 else C["red"]
+        self.text(
+            self.canvas, f"{daily_net:+,}원/일", 430, 7, 8, income_color
+        )
+        self.text(self.canvas, f"DAY {self.day}", 506, 7, 8, C["muted"])
         self.button(pygame.Rect(531, 5, 39, 21), "시드", small=True)
         self.button(pygame.Rect(573, 5, 29, 21), "저장", small=True)
         self.button(pygame.Rect(605, 5, 31, 21), "불러", small=True)
@@ -3200,7 +3228,10 @@ class CityGame:
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
         self.button(pygame.Rect(434, 294, 80, 23), "땅 확장", small=True)
-        self.text(self.canvas, cost_text, 474, 326, 9, C["gold"], center=True)
+        self.text(
+            self.canvas, f"{cost_text} · {self.expand_level}/4",
+            474, 326, 9, C["gold"], center=True
+        )
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
         if self.tool == "house":
