@@ -152,6 +152,16 @@ class GameCommand:
             separators=(",", ":"), allow_nan=False,
         )
 
+    @classmethod
+    def from_json(cls, value: str) -> "GameCommand":
+        if not isinstance(value, str) or len(value.encode("utf-8")) > MAX_COMMAND_BYTES:
+            raise ProtocolError("invalid command payload size")
+        try:
+            raw = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise ProtocolError("command is not valid JSON") from exc
+        return cls.from_dict(raw)
+
 
 @dataclass(frozen=True)
 class CommandDecision:
@@ -163,9 +173,9 @@ class CommandDecision:
 class CommandGate:
     """Server-side duplicate, sequence and stale-world protection.
 
-    Call accept only after authenticating the player and checking that the
-    command is allowed in the current game phase. The gate is not a substitute
-    for validating game rules or player permissions.
+    Call accept in the server's serialized command loop only after authenticating
+    the player and validating the command against current game rules. The gate
+    is not a substitute for validating ownership, costs, range or permissions.
     """
 
     def __init__(self, initial_revision: int = 0) -> None:
@@ -206,7 +216,8 @@ class WorldSnapshot:
 
     def __post_init__(self) -> None:
         _require_int(self.revision, "revision")
-        if self.schema_version != SNAPSHOT_SCHEMA_VERSION:
+        if (type(self.schema_version) is not int
+                or self.schema_version != SNAPSHOT_SCHEMA_VERSION):
             raise ProtocolError("unsupported snapshot schema")
         if not isinstance(self.world, dict):
             raise ProtocolError("world must be an object")
