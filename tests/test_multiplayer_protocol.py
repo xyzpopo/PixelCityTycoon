@@ -15,7 +15,9 @@ class GameCommandTests(unittest.TestCase):
             {"tool": "road", "x": 12, "y": 9},
         )
         restored = GameCommand.from_dict(command.to_dict())
+        from_json = GameCommand.from_json(command.to_json())
         self.assertEqual(restored, command)
+        self.assertEqual(from_json, command)
 
     def test_rejects_out_of_map_coordinates(self):
         with self.assertRaises(ProtocolError):
