@@ -1910,6 +1910,9 @@ class CityGame:
             "map_rotation", "camera_follow_worker", "underground_view",
             "underground_layer", "underground_mined", "houses", "house_levels",
             "city_objects", "logging_progress", "mines", "expand_level",
+            "selected_building_type", "selected_structure_anchor",
+            "build_palette_open", "build_palette_anchor", "build_palette_dragging",
+            "build_palette_hover_index", "build_palette_pressed_index",
             "money", "population", "wood", "stone", "day", "game_minutes",
             "worker_x", "worker_y", "worker_facing", "worker_path",
             "worker_move_progress", "worker_moved", "worker_action",
@@ -1958,9 +1961,18 @@ class CityGame:
                                 self.terrain[x][y].terrain = "mountain"
                             elif height == 0 and self.terrain[x][y].terrain == "mountain":
                                 self.terrain[x][y].terrain = "grass"
-            self.trees = valid_tile_set(data.get("trees", []))
-            self.rocks = valid_tile_set(data.get("rocks", []))
-            self.roads = valid_tile_set(data.get("roads", []))
+            self.trees = {
+                pos for pos in valid_tile_set(data.get("trees", []))
+                if self.terrain[pos[0]][pos[1]].terrain != "water"
+            }
+            self.rocks = {
+                pos for pos in valid_tile_set(data.get("rocks", []))
+                if self.terrain[pos[0]][pos[1]].terrain != "water"
+            }
+            self.roads = {
+                pos for pos in valid_tile_set(data.get("roads", []))
+                if pos not in self.trees and pos not in self.rocks
+            }
             self.road_direction = data.get("road_direction", "x")
             if self.road_direction not in ("x", "y"):
                 self.road_direction = "x"
@@ -1971,9 +1983,16 @@ class CityGame:
                     if (isinstance(entry, list) and len(entry) == 3
                             and type(entry[0]) is int and type(entry[1]) is int
                             and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H
+                            and (entry[0], entry[1]) in self.roads
                             and entry[2] in ("x", "y")):
                         self.road_directions[(entry[0], entry[1])] = entry[2]
-            self.houses = valid_tile_set(data.get("houses", []))
+            self.houses = {
+                pos for pos in valid_tile_set(data.get("houses", []))
+                if self.is_unlocked(*pos)
+                and self.terrain[pos[0]][pos[1]].terrain == "grass"
+                and pos not in self.trees and pos not in self.rocks
+                and pos not in self.roads
+            }
             self.house_levels = {}
             saved_house_levels = data.get("house_levels", [])
             if isinstance(saved_house_levels, list):
