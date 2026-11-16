@@ -3,6 +3,7 @@ A small isometric city-builder prototype using Pygame and procedural pixel-style
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 from array import array
@@ -95,20 +96,29 @@ C = {
 }
 
 TOOL_NAMES = [
-    "F1 이동", "F2 자연", "F3 도로", "F4 건설",
-    "F6 굴착", "F7 채굴", "F8 복원", "F10 인공"
+    "F1 이동", "F2 제거", "F3 도로", "F4 건설", "F8 복원"
 ]
-TOOL_KEYS = [
-    "move", "clear", "road", "house", "dig", "mine", "restore", "demolish"
-]
+TOOL_KEYS = ["move", "remove", "road", "house", "restore"]
+REMOVE_MODE_OPTIONS = (
+    ("clear", "자연"),
+    ("dig", "굴착"),
+    ("demolish", "인공"),
+)
+REMOVE_MODE_LABELS = {
+    "clear": "자연 제거",
+    "dig": "산 굴착",
+    "demolish": "인공 철거",
+}
+REMOVE_MODE_HINTS = {
+    "clear": "나무·바위를 제거해 목재·석재를 얻습니다.",
+    "dig": "산 타일을 한 층 낮춰 석재를 얻습니다.",
+    "demolish": "도로·다리·주택·시설을 철거합니다.",
+}
 TOOL_HINTS = {
     "move": "이동: 빈 땅을 클릭해 작업자를 이동합니다.",
-    "clear": "자연 제거: 나무·바위만 제거 · 목재/석재 획득",
-    "demolish": "인공 철거: 도로·다리·주택·채굴장 제거",
+    "remove": "제거: 자연·굴착·인공 중 대상을 선택 · [ ] 또는 하단 버튼으로 변경",
     "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
-    "house": "건설: [ ] 종류 변경 · 기존 건물 선택 후 G 업그레이드",
-    "dig": "굴착: 산을 한 층 낮추고 석재 획득",
-    "mine": "채굴장: 도로 옆 설치 · 지층별 6시간 자동 채굴",
+    "house": "건설: 빈 땅 클릭 → 건물 선택 · [ ] 종류 변경 · G 업그레이드",
     "restore": "지형 복원: 빈 땅을 한 층 높임 · 석재 2",
 }
 
@@ -177,6 +187,26 @@ def tile_key(x: int, y: int) -> str:
     return f"{x},{y}"
 
 
+def valid_tile_set(raw: object) -> Set[Tuple[int, int]]:
+    """Parse a save-file tile list without trusting its shape or coordinates."""
+    if not isinstance(raw, list):
+        return set()
+    result: Set[Tuple[int, int]] = set()
+    for entry in raw:
+        if (isinstance(entry, (list, tuple)) and len(entry) == 2
+                and type(entry[0]) is int and type(entry[1]) is int
+                and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H):
+            result.add((entry[0], entry[1]))
+    return result
+
+
+def safe_saved_int(value: object, default: int, low: int, high: int) -> int:
+    """Read a bounded integer from untrusted or older save data."""
+    if type(value) is not int:
+        return default
+    return max(low, min(high, value))
+
+
 @dataclass
 class TileInfo:
     terrain: str = "grass"
@@ -243,6 +273,7 @@ class CityGame:
         self.camera_x = 0.0
         self.camera_y = 0.0
         self.tool = "move"
+        self.remove_mode = "clear"
         self.worker_x = MAP_W // 2
         self.worker_y = MAP_H // 2
         self.worker_facing = (1, 0)
@@ -320,7 +351,31 @@ class CityGame:
             self.selected_structure_anchor = None
         if changed:
             mode_name = TOOL_NAMES[TOOL_KEYS.index(tool)].split(" ", 1)[1]
-            self.notify(f"{mode_name} 모드", 1.2)
+            if tool == "remove":
+                self.notify(
+                    f"제거 모드 · {REMOVE_MODE_LABELS[self.remove_mode]}",
+                    1.2
+                )
+            else:
+                self.notify(f"{mode_name} 모드", 1.2)
+
+    def active_action_tool(self) -> str:
+        """Resolve the selected sub-action inside a consolidated parent mode."""
+        return self.remove_mode if self.tool == "remove" else self.tool
+
+    def set_remove_mode(self, mode: str) -> None:
+        if mode not in REMOVE_MODE_LABELS:
+            return
+        if self.remove_mode == mode:
+            return
+        self.remove_mode = mode
+        if self.tool == "remove":
+            self.notify(f"제거 대상: {REMOVE_MODE_LABELS[mode]}", 1.6)
+
+    def cycle_remove_mode(self, direction: int) -> None:
+        modes = [mode for mode, _label in REMOVE_MODE_OPTIONS]
+        current = modes.index(self.remove_mode)
+        self.set_remove_mode(modes[(current + direction) % len(modes)])
 
     def init_worker_sounds(self) -> None:
         """Create small procedural work sounds; audio failure never blocks startup."""
@@ -872,6 +927,7 @@ class CityGame:
         self, kind: str, x: int, y: int, allow_worker: bool = False,
         ignore_order: Optional[Tuple[str, int, int]] = None,
         require_forest: bool = True,
+        require_road: bool = True,
     ) -> bool:
         """Validate an entire multi-tile footprint, not just its anchor tile."""
         spec = CITY_OBJECT_DEFS.get(kind)
@@ -906,7 +962,7 @@ class CityGame:
                 if footprint & self.footprint_for(queued_tool, qx, qy):
                     return False
 
-        if spec["road"] and not self.footprint_has_road(footprint):
+        if spec["road"] and require_road and not self.footprint_has_road(footprint):
             return False
         if kind == "logging" and require_forest:
             nearby_trees = {
@@ -1781,8 +1837,9 @@ class CityGame:
 
     def act_on_tile(self, x: int, y: int) -> None:
         """Compatibility entry point: all non-movement tools queue actions."""
-        if self.tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
-            self.toggle_work_order(self.tool, x, y)
+        action_tool = self.active_action_tool()
+        if action_tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
+            self.toggle_work_order(action_tool, x, y)
 
     def check_tutorial(self) -> None:
         if self.tutorial_done:
@@ -1869,17 +1926,52 @@ class CityGame:
             "tutorial_roads": self.tutorial_roads,
             "tutorial_house_built": self.tutorial_house_built,
         }
+        temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
         try:
             SAVE_DIR.mkdir(parents=True, exist_ok=True)
-            SAVE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.notify("도시를 저장했어요.", 3)
-        except OSError as exc:
-            self.notify(f"저장 실패: {exc}", 4)
+            serialized = json.dumps(
+                data, ensure_ascii=False, indent=2, allow_nan=False
+            )
+            temporary_file.write_text(serialized, encoding="utf-8")
+            os.replace(temporary_file, SAVE_FILE)
+            self.notify("도시를 안전하게 저장했어요.", 3)
+        except (OSError, TypeError, ValueError) as exc:
+            try:
+                temporary_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.notify(f"저장 실패 · 기존 저장 파일은 유지했어요: {exc}", 4)
 
     def load_game(self) -> None:
+        state_fields = (
+            "seed", "rng", "terrain", "trees", "rocks", "roads",
+            "road_directions", "road_direction", "selected_road_tile",
+            "map_rotation", "camera_follow_worker", "underground_view",
+            "underground_layer", "underground_mined", "houses", "house_levels",
+            "city_objects", "logging_progress", "mines", "expand_level",
+            "selected_building_type", "selected_structure_anchor",
+            "build_palette_open", "build_palette_anchor", "build_palette_dragging",
+            "build_palette_hover_index", "build_palette_pressed_index",
+            "money", "population", "wood", "stone", "day", "game_minutes",
+            "worker_x", "worker_y", "worker_facing", "worker_path",
+            "worker_move_progress", "worker_moved", "worker_action",
+            "worker_action_timer", "worker_action_elapsed",
+            "worker_action_hit_played", "worker_pending_action", "work_queue",
+            "work_path_active", "tool", "remove_mode", "camera_x", "camera_y",
+            "tutorial_step", "tutorial_done", "tutorial_removed",
+            "tutorial_roads", "tutorial_house_built",
+        )
+        previous_state = {
+            name: copy.deepcopy(getattr(self, name)) for name in state_fields
+        }
         try:
             data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
-            self.generate_world(int(data["seed"]))
+            if not isinstance(data, dict):
+                raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
+            saved_seed = data.get("seed")
+            if type(saved_seed) is not int:
+                raise ValueError("저장 파일의 지도 시드가 올바르지 않아요.")
+            self.generate_world(saved_seed)
             saved_rotation = data.get("map_rotation", 0)
             self.map_rotation = saved_rotation % 4 if type(saved_rotation) is int else 0
             self.camera_follow_worker = bool(data.get("camera_follow_worker", False))
@@ -1908,9 +2000,18 @@ class CityGame:
                                 self.terrain[x][y].terrain = "mountain"
                             elif height == 0 and self.terrain[x][y].terrain == "mountain":
                                 self.terrain[x][y].terrain = "grass"
-            self.trees = {tuple(p) for p in data.get("trees", [])}
-            self.rocks = {tuple(p) for p in data.get("rocks", [])}
-            self.roads = {tuple(p) for p in data.get("roads", [])}
+            self.trees = {
+                pos for pos in valid_tile_set(data.get("trees", []))
+                if self.terrain[pos[0]][pos[1]].terrain != "water"
+            }
+            self.rocks = {
+                pos for pos in valid_tile_set(data.get("rocks", []))
+                if self.terrain[pos[0]][pos[1]].terrain != "water"
+            }
+            self.roads = {
+                pos for pos in valid_tile_set(data.get("roads", []))
+                if pos not in self.trees and pos not in self.rocks
+            }
             self.road_direction = data.get("road_direction", "x")
             if self.road_direction not in ("x", "y"):
                 self.road_direction = "x"
@@ -1921,9 +2022,16 @@ class CityGame:
                     if (isinstance(entry, list) and len(entry) == 3
                             and type(entry[0]) is int and type(entry[1]) is int
                             and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H
+                            and (entry[0], entry[1]) in self.roads
                             and entry[2] in ("x", "y")):
                         self.road_directions[(entry[0], entry[1])] = entry[2]
-            self.houses = {tuple(p) for p in data.get("houses", [])}
+            self.houses = {
+                pos for pos in valid_tile_set(data.get("houses", []))
+                if self.is_unlocked(*pos)
+                and self.terrain[pos[0]][pos[1]].terrain == "grass"
+                and pos not in self.trees and pos not in self.rocks
+                and pos not in self.roads
+            }
             self.house_levels = {}
             saved_house_levels = data.get("house_levels", [])
             if isinstance(saved_house_levels, list):
@@ -1952,7 +2060,7 @@ class CityGame:
                             and pos not in self.roads and pos not in self.houses
                             and pos not in self.trees and pos not in self.rocks):
                         self.mines[pos] = (entry[2], float(entry[3]))
-            self.expand_level = int(clamp(int(data.get("expand_level", 0)), 0, 4))
+            self.expand_level = safe_saved_int(data.get("expand_level", 0), 0, 0, 4)
             saved_city_objects = data.get("city_objects", [])
             if isinstance(saved_city_objects, list):
                 for entry in saved_city_objects:
@@ -1961,7 +2069,9 @@ class CityGame:
                             or entry[2] not in CITY_OBJECT_DEFS or type(entry[3]) is not int):
                         continue
                     x, y, kind, level = entry
-                    if self.can_build_city_object(kind, x, y, require_forest=False):
+                    if self.can_build_city_object(
+                        kind, x, y, require_forest=False, require_road=False
+                    ):
                         self.city_objects[(x, y)] = {
                             "type": kind, "level": int(clamp(level, 1, 3))
                         }
@@ -1979,15 +2089,15 @@ class CityGame:
             for anchor, object_data in self.city_objects.items():
                 if object_data.get("type") == "logging":
                     self.logging_progress.setdefault(anchor, 0.0)
-            self.money = int(data.get("money", 100000))
-            self.population = int(data.get("population", 0))
-            self.wood = int(data.get("wood", 0))
-            self.stone = int(data.get("stone", 0))
-            self.day = int(data.get("day", 1))
-            self.game_minutes = int(data.get("game_minutes", 480))
+            self.money = safe_saved_int(data.get("money", 100000), 100000, -1000000000, 1000000000)
+            self.population = safe_saved_int(data.get("population", 0), 0, 0, 1000000)
+            self.wood = safe_saved_int(data.get("wood", 0), 0, 0, 1000000000)
+            self.stone = safe_saved_int(data.get("stone", 0), 0, 0, 1000000000)
+            self.day = safe_saved_int(data.get("day", 1), 1, 1, 1000000000)
+            self.game_minutes = safe_saved_int(data.get("game_minutes", 480), 480, 0, 1439)
             worker_pos = data.get("worker", [MAP_W // 2, MAP_H // 2])
             if (isinstance(worker_pos, list) and len(worker_pos) == 2
-                    and all(isinstance(v, int) for v in worker_pos)
+                    and all(type(v) is int for v in worker_pos)
                     and self.worker_can_stand(worker_pos[0], worker_pos[1])):
                 self.worker_x, self.worker_y = worker_pos
             facing = data.get("worker_facing", [1, 0])
@@ -2047,10 +2157,10 @@ class CityGame:
                     if tool == "road":
                         self.road_directions.setdefault((x, y), self.infer_road_axis(x, y))
 
-            self.tutorial_step = int(data.get("tutorial_step", 0))
+            self.tutorial_step = safe_saved_int(data.get("tutorial_step", 0), 0, 0, 20)
             self.tutorial_done = bool(data.get("tutorial_done", False))
-            self.tutorial_removed = int(data.get("tutorial_removed", 0))
-            self.tutorial_roads = int(data.get("tutorial_roads", 0))
+            self.tutorial_removed = safe_saved_int(data.get("tutorial_removed", 0), 0, 0, 1000000)
+            self.tutorial_roads = safe_saved_int(data.get("tutorial_roads", 0), 0, 0, 1000000)
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
             self.center_camera()
             if self.camera_follow_worker:
@@ -2058,8 +2168,10 @@ class CityGame:
             self.notify("저장된 도시를 불러왔어요.", 3)
         except FileNotFoundError:
             self.notify("저장 파일이 없어요. 먼저 저장해 주세요.", 3)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            self.notify(f"불러오기 실패: {exc}", 4)
+        except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            for name, value in previous_state.items():
+                setattr(self, name, value)
+            self.notify(f"불러오기 실패 · 기존 도시는 유지했어요: {exc}", 4)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -3068,6 +3180,7 @@ class CityGame:
                     x, y = tile
                     cx, cy = self.tile_to_screen(x, y)
                     pts = self.diamond(cx, cy, TILE_W*self.zoom, TILE_H*self.zoom)
+                    active_tool = self.active_action_tool()
                     if self.tool == "house":
                         if self.build_palette_open and self.build_palette_hover_index is not None:
                             preview_kind = BUILD_MENU_ITEMS[self.build_palette_hover_index][0]
@@ -3090,19 +3203,19 @@ class CityGame:
                                 self.canvas, C["green"] if allowed else C["red"],
                                 fpts, max(1, round(1.4*self.zoom))
                             )
-                    elif self.tool == "road":
+                    elif active_tool == "road":
                         allowed = self.can_build_road_on(x, y) or (x, y) in self.roads
-                    elif self.tool == "clear":
+                    elif active_tool == "clear":
                         allowed = (x, y) in self.trees or (x, y) in self.rocks
-                    elif self.tool == "demolish":
+                    elif active_tool == "demolish":
                         allowed = (x, y) in self.roads or self.city_object_at(x, y) is not None
-                    elif self.tool == "dig":
+                    elif active_tool == "dig":
                         allowed = self.can_dig_terrain(x, y)
-                    elif self.tool == "mine":
+                    elif active_tool == "mine":
                         allowed = self.can_build_mine_on(
                             x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
                         )
-                    elif self.tool == "restore":
+                    elif active_tool == "restore":
                         allowed = self.can_restore_terrain(
                             x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
                         )
@@ -3247,9 +3360,19 @@ class CityGame:
         # Compact toolbar: movement, clearing/demolition, construction and terrain tools.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, BOTTOM_Y), (LOGICAL_W, BOTTOM_Y), 1)
-        xs = [4, 50, 96, 142, 188, 234, 280, 326]
+        tool_xs = [4, 50, 96, 142, 188]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
-            self.button(pygame.Rect(xs[i], 294, 43, 23), name, self.tool == key, small=True)
+            self.button(
+                pygame.Rect(tool_xs[i], 294, 43, 23),
+                name, self.tool == key, small=True
+            )
+        if self.tool == "remove":
+            remove_xs = [234, 280, 326]
+            for index, (mode, label) in enumerate(REMOVE_MODE_OPTIONS):
+                self.button(
+                    pygame.Rect(remove_xs[index], 294, 43, 23),
+                    label, self.remove_mode == mode, small=True
+                )
 
         self.button(
             pygame.Rect(373, 294, 57, 23), "R 회전",
@@ -3265,7 +3388,12 @@ class CityGame:
         )
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
-        if self.tool == "house":
+        if self.tool == "remove":
+            hint = (
+                f"제거: {REMOVE_MODE_HINTS[self.remove_mode]} "
+                "· [ ] 또는 하단 버튼으로 변경"
+            )
+        elif self.tool == "house":
             hint = "건설: 빈 땅 클릭 → 건물 선택 → 건물 위에서 마우스를 놓아 예약 · G 업그레이드"
         self.text(self.canvas, hint, 10, 327, 8, C["text"])
         self.text(
@@ -3321,11 +3449,17 @@ class CityGame:
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
-                tool_xs = [4, 50, 96, 142, 188, 234, 280, 326]
+                tool_xs = [4, 50, 96, 142, 188]
                 for i, tx in enumerate(tool_xs):
                     if tx <= x <= tx + 43:
                         self.select_tool(TOOL_KEYS[i])
                         return
+                if self.tool == "remove":
+                    remove_xs = [234, 280, 326]
+                    for index, tx in enumerate(remove_xs):
+                        if tx <= x <= tx + 43:
+                            self.set_remove_mode(REMOVE_MODE_OPTIONS[index][0])
+                            return
                 if 373 <= x <= 430:
                     self.toggle_road_direction()
                     return
@@ -3358,7 +3492,7 @@ class CityGame:
         if self.tool == "move":
             self.set_worker_destination(x, y)
         else:
-            self.toggle_work_order(self.tool, x, y)
+            self.toggle_work_order(self.active_action_tool(), x, y)
 
     def queue_drag_order(self, tool: str, x: int, y: int) -> None:
         """Queue one drag-painted surface tile without toggling existing orders."""
@@ -3388,12 +3522,13 @@ class CityGame:
             tile = (x0, y0)
             if tile not in self.tool_drag_visited:
                 self.tool_drag_visited.add(tile)
+                active_tool = self.active_action_tool()
                 if self.tool == "move":
                     self.tool_drag_last_tile = tile
                 elif self.tool == "road" and tile in self.roads:
                     self.selected_road_tile = tile
-                elif self.tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
-                    self.queue_drag_order(self.tool, x0, y0)
+                elif active_tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
+                    self.queue_drag_order(active_tool, x0, y0)
             if x0 == x1 and y0 == y1:
                 break
             twice_error = 2 * error
@@ -3523,17 +3658,11 @@ class CityGame:
                     elif event.key == pygame.K_F1:
                         self.select_tool("move")
                     elif event.key == pygame.K_F2:
-                        self.select_tool("clear")
-                    elif event.key == pygame.K_F10:
-                        self.select_tool("demolish")
+                        self.select_tool("remove")
                     elif event.key == pygame.K_F3:
                         self.select_tool("road")
                     elif event.key == pygame.K_F4:
                         self.select_tool("house")
-                    elif event.key == pygame.K_F6:
-                        self.select_tool("dig")
-                    elif event.key == pygame.K_F7:
-                        self.select_tool("mine")
                     elif event.key == pygame.K_F8:
                         self.select_tool("restore")
                     elif event.key == pygame.K_r:
@@ -3560,30 +3689,28 @@ class CityGame:
                         if self.underground_view:
                             self.underground_layer = max(1, self.underground_layer - 1)
                             self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
+                        elif self.tool == "remove":
+                            self.cycle_remove_mode(-1)
                         elif self.tool == "house":
                             self.cycle_building_type(-1)
                     elif event.key == pygame.K_RIGHTBRACKET:
                         if self.underground_view:
                             self.underground_layer = min(3, self.underground_layer + 1)
                             self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
+                        elif self.tool == "remove":
+                            self.cycle_remove_mode(1)
                         elif self.tool == "house":
                             self.cycle_building_type(1)
                     elif event.key == pygame.K_1:
                         self.select_tool("move")
                     elif event.key == pygame.K_2:
-                        self.select_tool("clear")
+                        self.select_tool("remove")
                     elif event.key == pygame.K_3:
                         self.select_tool("road")
                     elif event.key == pygame.K_4:
                         self.select_tool("house")
                     elif event.key == pygame.K_5:
-                        self.select_tool("dig")
-                    elif event.key == pygame.K_6:
-                        self.select_tool("mine")
-                    elif event.key == pygame.K_7:
                         self.select_tool("restore")
-                    elif event.key == pygame.K_8:
-                        self.select_tool("demolish")
                     elif event.key == pygame.K_F5:
                         self.save_game()
                     elif event.key == pygame.K_F9:
@@ -3776,10 +3903,9 @@ class CityGame:
                 self.worker_action_hit_played = False
         self.update_work_queue()
         # Accelerated clock: six in-game minutes pass per real second.
-        now = time.time()
-        elapsed = now - self.last_clock_tick
-        self.last_clock_tick = now
-        game_elapsed_minutes = elapsed * 6
+        # Cap one frame's contribution so resuming a minimized/stalled window
+        # cannot instantly consume many in-game hours or exhaust a forest.
+        game_elapsed_minutes = clamp(dt, 0.0, 0.25) * 6
         self.game_minutes += game_elapsed_minutes
         self.update_mines(game_elapsed_minutes)
         self.update_logging_camps(game_elapsed_minutes)
@@ -3797,8 +3923,9 @@ class CityGame:
         # The first tutorial task is completed by giving the character a destination.
         if not self.tutorial_done and self.tutorial_step == 0 and self.worker_moved and not self.worker_path:
             self.tutorial_step = 1
-            self.tool = "clear"
-            self.notify("좋아요! 이제 나무 2개를 제거해 건설 공간을 만드세요.", 4)
+            self.remove_mode = "clear"
+            self.select_tool("remove")
+            self.notify("좋아요! 이제 제거 모드로 나무 2개를 치워 건설 공간을 만드세요.", 4)
 
     def draw(self) -> None:
         self.draw_world()
@@ -3810,7 +3937,7 @@ class CityGame:
 
     def run(self) -> None:
         while self.running:
-            dt = self.clock.tick(60) / 1000.0
+            dt = min(self.clock.tick(60) / 1000.0, 0.25)
             self.process_events()
             self.update(dt)
             self.draw()
