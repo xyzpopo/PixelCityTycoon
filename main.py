@@ -1891,17 +1891,21 @@ class CityGame:
             "tutorial_roads": self.tutorial_roads,
             "tutorial_house_built": self.tutorial_house_built,
         }
+        temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
         try:
             SAVE_DIR.mkdir(parents=True, exist_ok=True)
-            temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
             serialized = json.dumps(
                 data, ensure_ascii=False, indent=2, allow_nan=False
             )
             temporary_file.write_text(serialized, encoding="utf-8")
             os.replace(temporary_file, SAVE_FILE)
             self.notify("도시를 안전하게 저장했어요.", 3)
-        except OSError as exc:
-            self.notify(f"저장 실패: {exc}", 4)
+        except (OSError, TypeError, ValueError) as exc:
+            try:
+                temporary_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.notify(f"저장 실패 · 기존 저장 파일은 유지했어요: {exc}", 4)
 
     def load_game(self) -> None:
         state_fields = (
@@ -2058,7 +2062,7 @@ class CityGame:
             self.game_minutes = safe_saved_int(data.get("game_minutes", 480), 480, 0, 1439)
             worker_pos = data.get("worker", [MAP_W // 2, MAP_H // 2])
             if (isinstance(worker_pos, list) and len(worker_pos) == 2
-                    and all(isinstance(v, int) for v in worker_pos)
+                    and all(type(v) is int for v in worker_pos)
                     and self.worker_can_stand(worker_pos[0], worker_pos[1])):
                 self.worker_x, self.worker_y = worker_pos
             facing = data.get("worker_facing", [1, 0])
@@ -3882,7 +3886,7 @@ class CityGame:
 
     def run(self) -> None:
         while self.running:
-            dt = self.clock.tick(60) / 1000.0
+            dt = min(self.clock.tick(60) / 1000.0, 0.25)
             self.process_events()
             self.update(dt)
             self.draw()
