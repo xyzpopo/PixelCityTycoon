@@ -36,8 +36,9 @@ class ProtocolError(ValueError):
 
 
 def _require_id(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not value or len(value) > 80:
-        raise ProtocolError(f"{field} must be a non-empty string of at most 80 characters")
+    if (not isinstance(value, str) or not value or len(value) > 80
+            or value.strip() != value or not value.isprintable()):
+        raise ProtocolError(f"{field} must be a printable string of at most 80 characters")
     return value
 
 
@@ -48,7 +49,7 @@ def _require_int(value: Any, field: str, minimum: int = 0) -> int:
 
 
 def _validate_payload(action: str, payload: Any) -> Dict[str, Any]:
-    if action not in ACTION_PAYLOAD_KEYS:
+    if not isinstance(action, str) or action not in ACTION_PAYLOAD_KEYS:
         raise ProtocolError(f"unsupported action: {action}")
     if not isinstance(payload, dict):
         raise ProtocolError("payload must be an object")
@@ -62,7 +63,7 @@ def _validate_payload(action: str, payload: Any) -> Dict[str, Any]:
         if x >= MAP_WIDTH or y >= MAP_HEIGHT:
             raise ProtocolError("tile coordinate is outside the map")
     if action == "queue_work":
-        if clean["tool"] not in {
+        if not isinstance(clean["tool"], str) or clean["tool"] not in {
             "clear", "demolish", "road", "house", "dig", "mine", "restore",
             "commercial", "industrial", "public", "park", "lamp",
             "decor_tree", "logging",
@@ -90,7 +91,7 @@ class GameCommand:
         _require_id(self.player_id, "player_id")
         _require_int(self.sequence, "sequence", 1)
         _require_int(self.expected_revision, "expected_revision")
-        if self.protocol_version != PROTOCOL_VERSION:
+        if type(self.protocol_version) is not int or self.protocol_version != PROTOCOL_VERSION:
             raise ProtocolError("unsupported protocol version")
         object.__setattr__(self, "payload", _validate_payload(self.action, self.payload))
         if len(self.to_json().encode("utf-8")) > MAX_COMMAND_BYTES:
@@ -210,9 +211,12 @@ class WorldSnapshot:
         if not isinstance(self.world, dict):
             raise ProtocolError("world must be an object")
         # Validate JSON compatibility and prevent NaN/Infinity on the wire.
-        encoded = json.dumps(
-            self.world, ensure_ascii=False, sort_keys=True, allow_nan=False
-        )
+        try:
+            encoded = json.dumps(
+                self.world, ensure_ascii=False, sort_keys=True, allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProtocolError("world snapshot must contain finite JSON data") from exc
         if len(encoded.encode("utf-8")) > 2_000_000:
             raise ProtocolError("snapshot is too large")
 
