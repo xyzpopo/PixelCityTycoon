@@ -349,6 +349,8 @@ class CityGame:
         if changed:
             self.close_build_palette()
             self.selected_structure_anchor = None
+            if tool != "road":
+                self.selected_road_tile = None
         if changed:
             mode_name = TOOL_NAMES[TOOL_KEYS.index(tool)].split(" ", 1)[1]
             if tool == "remove":
@@ -2560,162 +2562,430 @@ class CityGame:
             )
 
     def draw_house(self, x: int, y: int, level: int = 1) -> None:
+        """Draw a compact pixel-art home with visible upgrades at each level."""
         cx, cy = self.tile_to_screen(x, y)
         z = self.zoom
         level = int(clamp(level, 1, 3))
-        base_y = cy - 2*z
-        left = (round(cx - 9*z), round(base_y - 7*z))
-        back = (round(cx), round(base_y - 12*z))
-        right = (round(cx + 9*z), round(base_y - 7*z))
-        front = (round(cx), round(base_y - 2*z))
-        left_bottom = (round(cx - 9*z), round(base_y + 5*z))
+        base_y = cy - z
+        wall_height = (10 + (level - 1) * 7) * z
+
+        foundation = self.diamond(cx, base_y + 7*z, 18*z, 8*z)
+        pygame.draw.polygon(self.canvas, (91, 91, 76), foundation)
+        pygame.draw.polygon(self.canvas, (55, 64, 56), foundation, max(1, round(z)))
+
+        left_top = (round(cx - 8*z), round(base_y - wall_height*0.42))
+        back_top = (round(cx), round(base_y - wall_height*0.82))
+        right_top = (round(cx + 8*z), round(base_y - wall_height*0.42))
+        front_top = (round(cx), round(base_y))
+        left_bottom = (round(cx - 8*z), round(base_y + 5*z))
         front_bottom = (round(cx), round(base_y + 10*z))
-        right_bottom = (round(cx + 9*z), round(base_y + 5*z))
-        pygame.draw.polygon(self.canvas, (190, 153, 105), [left, front, front_bottom, left_bottom])
-        pygame.draw.polygon(self.canvas, (142, 105, 76), [front, right, right_bottom, front_bottom])
-        roof_raise = (level - 1) * 7 * z
-        roof_peak = (round(cx), round(base_y - 25*z - roof_raise))
-        roof_left = (round(cx - 11*z), round(base_y - 12*z - roof_raise))
-        roof_front = (round(cx), round(base_y - 5*z - roof_raise))
-        roof_right = (round(cx + 11*z), round(base_y - 12*z - roof_raise))
-        pygame.draw.polygon(self.canvas, (153, 57, 48), [roof_peak, roof_left, roof_front])
-        pygame.draw.polygon(self.canvas, (119, 45, 44), [roof_peak, roof_front, roof_right])
-        pygame.draw.line(self.canvas, (221, 106, 65), roof_peak, roof_left, max(1, round(z)))
-        pygame.draw.rect(self.canvas, (75, 141, 164),
-                         (round(cx - 6*z), round(base_y - 3*z), max(2, round(4*z)), max(4, round(5*z))))
-        pygame.draw.rect(self.canvas, (85, 54, 38),
-                         (round(cx + 1*z), round(base_y + 1*z), max(3, round(4*z)), max(8, round(7*z))))
+        right_bottom = (round(cx + 8*z), round(base_y + 5*z))
+        pygame.draw.polygon(
+            self.canvas, (206, 172, 119),
+            [left_top, front_top, front_bottom, left_bottom]
+        )
+        pygame.draw.polygon(
+            self.canvas, (157, 119, 82),
+            [front_top, right_top, right_bottom, front_bottom]
+        )
+        pygame.draw.line(self.canvas, (239, 207, 151), left_top, front_top, max(1, round(z)))
+
+        roof_base = base_y - wall_height*0.82
+        roof_peak = (round(cx), round(roof_base - 15*z))
+        roof_left = (round(cx - 11*z), round(roof_base - 2*z))
+        roof_front = (round(cx), round(roof_base + 5*z))
+        roof_right = (round(cx + 11*z), round(roof_base - 2*z))
+        pygame.draw.polygon(self.canvas, (151, 54, 47), [roof_peak, roof_left, roof_front])
+        pygame.draw.polygon(self.canvas, (105, 39, 42), [roof_peak, roof_front, roof_right])
+        pygame.draw.line(self.canvas, (224, 111, 70), roof_peak, roof_left, max(1, round(z)))
+        pygame.draw.line(self.canvas, (185, 78, 57), roof_left, roof_front, max(1, round(z)))
+        pygame.draw.line(self.canvas, (76, 39, 39), roof_peak, roof_right, max(1, round(z)))
+
+        chimney_x = round(cx - 6*z)
+        chimney_y = round(roof_base - 11*z)
+        pygame.draw.rect(
+            self.canvas, (105, 67, 56),
+            (chimney_x, chimney_y, max(3, round(4*z)), max(10, round(12*z)))
+        )
+        pygame.draw.rect(
+            self.canvas, (166, 91, 70),
+            (chimney_x - max(1, round(z)), chimney_y,
+             max(4, round(6*z)), max(2, round(2*z)))
+        )
+
+        door_w, door_h = max(3, round(4*z)), max(6, round(7*z))
+        pygame.draw.rect(
+            self.canvas, (77, 48, 37),
+            (round(cx + z), round(base_y + z), door_w, door_h)
+        )
+        pygame.draw.rect(
+            self.canvas, (230, 184, 91),
+            (round(cx + z), round(base_y + z), max(1, round(z)), max(2, round(2*z)))
+        )
+        window_w, window_h = max(3, round(4*z)), max(4, round(5*z))
+        for wx, wy in ((cx - 7*z, base_y - 4*z), (cx + 4*z, base_y - 3*z)):
+            rect = pygame.Rect(round(wx), round(wy), window_w, window_h)
+            pygame.draw.rect(self.canvas, (47, 91, 111), rect)
+            pygame.draw.rect(self.canvas, (136, 202, 204), rect, max(1, round(z)))
+            pygame.draw.line(
+                self.canvas, (190, 225, 207),
+                (rect.centerx, rect.y + 1), (rect.centerx, rect.bottom - 1), 1
+            )
+        pygame.draw.polygon(
+            self.canvas, (126, 94, 63),
+            [(round(cx - 3*z), round(base_y + 10*z)),
+             (round(cx + 4*z), round(base_y + 10*z)),
+             (round(cx + 3*z), round(base_y + 12*z)),
+             (round(cx - 2*z), round(base_y + 12*z))]
+        )
+
         if level >= 2:
-            pygame.draw.rect(self.canvas, (75, 141, 164),
-                             (round(cx - 7*z), round(base_y - 11*z), max(3, round(4*z)), max(4, round(4*z))))
+            upper_y = round(base_y - 10*z)
+            for wx in (cx - 6*z, cx + 2*z):
+                rect = pygame.Rect(round(wx), upper_y, window_w, window_h)
+                pygame.draw.rect(self.canvas, (48, 92, 116), rect)
+                pygame.draw.rect(self.canvas, (171, 213, 208), rect, max(1, round(z)))
+            pygame.draw.line(
+                self.canvas, (110, 76, 54),
+                (round(cx - 8*z), round(base_y - z)),
+                (round(cx - z), round(base_y - z)), max(1, round(z))
+            )
         if level >= 3:
-            pygame.draw.rect(self.canvas, (75, 141, 164),
-                             (round(cx + 3*z), round(base_y - 11*z), max(3, round(4*z)), max(4, round(4*z))))
+            roof_trim_y = round(roof_base - 2*z)
+            pygame.draw.line(
+                self.canvas, (239, 197, 127),
+                (round(cx - 8*z), roof_trim_y),
+                (round(cx + 8*z), roof_trim_y), max(1, round(z))
+            )
+            pygame.draw.rect(
+                self.canvas, (77, 111, 130),
+                (round(cx - 2*z), round(roof_base - 8*z),
+                 max(4, round(5*z)), max(4, round(5*z)))
+            )
 
     def draw_city_object(self, x: int, y: int, kind: str, level: int = 1) -> None:
-        """Draw multi-tile buildings and decorative facilities in isometric view."""
+        """Draw recognizable pixel-art city structures with distinct rooflines."""
         spec = CITY_OBJECT_DEFS[kind]
         width, height = int(spec["w"]), int(spec["h"])
         z = self.zoom
-        tw, th = TILE_W * z, TILE_H * z
+        tw, th = TILE_W*z, TILE_H*z
         footprint = self.footprint_for(kind, x, y)
-        screen_centers = [self.tile_to_screen(tx, ty) for tx, ty in footprint]
-        cx = sum(point[0] for point in screen_centers) / len(screen_centers)
-        ground_y = sum(point[1] for point in screen_centers) / len(screen_centers)
+        centers = [self.tile_to_screen(tx, ty) for tx, ty in footprint]
+        cx = sum(point[0] for point in centers) / len(centers)
+        ground_y = sum(point[1] for point in centers) / len(centers)
         half_w = (width + height) * tw / 4
         half_h = (width + height) * th / 4
         ground = [
-            (round(cx), round(ground_y - half_h)),
-            (round(cx + half_w), round(ground_y)),
-            (round(cx), round(ground_y + half_h)),
-            (round(cx - half_w), round(ground_y)),
+            (round(cx), round(ground_y-half_h)),
+            (round(cx+half_w), round(ground_y)),
+            (round(cx), round(ground_y+half_h)),
+            (round(cx-half_w), round(ground_y)),
         ]
+        line = max(1, round(z))
+        thick = max(2, round(2*z))
 
         if kind == "park":
             pygame.draw.polygon(self.canvas, (69, 137, 75), ground)
-            pygame.draw.polygon(self.canvas, (45, 101, 62), ground, max(1, round(z)))
-            pygame.draw.line(self.canvas, (198, 175, 117),
-                             (round(cx - half_w * 0.45), round(ground_y)),
-                             (round(cx + half_w * 0.45), round(ground_y)),
-                             max(2, round(2*z)))
-            for ox, oy, radius, color in (
-                (-half_w * 0.25, -2*z, 5, (76, 150, 81)),
-                (half_w * 0.23, 2*z, 5, (62, 130, 72)),
+            pygame.draw.polygon(self.canvas, (39, 89, 56), ground, line)
+            pygame.draw.line(
+                self.canvas, (197, 177, 132),
+                (round(cx-half_w*0.58), round(ground_y)),
+                (round(cx+half_w*0.58), round(ground_y)), thick
+            )
+            pygame.draw.line(
+                self.canvas, (218, 195, 146),
+                (round(cx), round(ground_y-half_h*0.52)),
+                (round(cx), round(ground_y+half_h*0.48)), line
+            )
+            pond = pygame.Rect(
+                round(cx+half_w*0.12), round(ground_y-half_h*0.42),
+                max(7, round(half_w*0.36)), max(4, round(half_h*0.38))
+            )
+            pygame.draw.ellipse(self.canvas, (207, 194, 133), pond.inflate(line*2, line*2))
+            pygame.draw.ellipse(self.canvas, (54, 139, 166), pond)
+            pygame.draw.line(
+                self.canvas, (130, 208, 214),
+                (pond.x+line, pond.y+line), (pond.right-line, pond.y+line), line
+            )
+            for tx, ty in (
+                (cx-half_w*0.34, ground_y-half_h*0.20),
+                (cx+half_w*0.30, ground_y+half_h*0.17),
             ):
-                pygame.draw.circle(self.canvas, color,
-                                   (round(cx + ox), round(ground_y + oy)),
-                                   max(3, round(radius*z)))
-            pygame.draw.rect(self.canvas, (116, 84, 53),
-                             (round(cx - 2*z), round(ground_y - 4*z),
-                              max(4, round(7*z)), max(2, round(2*z))))
+                pygame.draw.rect(
+                    self.canvas, (101, 68, 43),
+                    (round(tx-z), round(ty-z), max(2, round(3*z)), max(5, round(6*z)))
+                )
+                pygame.draw.rect(
+                    self.canvas, (39, 101, 58),
+                    (round(tx-5*z), round(ty-10*z), max(8, round(10*z)), max(7, round(8*z)))
+                )
+                pygame.draw.rect(
+                    self.canvas, (84, 157, 73),
+                    (round(tx-3*z), round(ty-14*z), max(5, round(7*z)), max(6, round(6*z)))
+                )
+                pygame.draw.rect(
+                    self.canvas, (147, 190, 91),
+                    (round(tx-z), round(ty-13*z), max(2, round(2*z)), max(2, round(2*z)))
+                )
+            pygame.draw.rect(
+                self.canvas, (113, 76, 48),
+                (round(cx-half_w*0.34), round(ground_y+half_h*0.22),
+                 max(7, round(9*z)), max(2, round(2*z)))
+            )
+            pygame.draw.circle(
+                self.canvas, (238, 205, 105),
+                (round(cx-half_w*0.08), round(ground_y-half_h*0.20)), max(1, round(2*z))
+            )
+            pygame.draw.circle(
+                self.canvas, (213, 125, 122),
+                (round(cx-half_w*0.02), round(ground_y-half_h*0.12)), max(1, round(2*z))
+            )
             return
 
         if kind == "lamp":
-            pygame.draw.polygon(self.canvas, (89, 94, 83), ground)
-            pygame.draw.line(self.canvas, (72, 76, 72),
-                             (round(cx), round(ground_y)),
-                             (round(cx), round(ground_y - 25*z)),
-                             max(2, round(2*z)))
-            pygame.draw.line(self.canvas, (72, 76, 72),
-                             (round(cx), round(ground_y - 23*z)),
-                             (round(cx + 6*z), round(ground_y - 23*z)),
-                             max(2, round(2*z)))
-            pygame.draw.rect(self.canvas, (247, 218, 126),
-                             (round(cx + 4*z), round(ground_y - 26*z),
-                              max(4, round(5*z)), max(3, round(4*z))))
+            pygame.draw.polygon(self.canvas, (90, 96, 86), ground)
+            pygame.draw.polygon(self.canvas, (49, 61, 57), ground, line)
+            base = (round(cx), round(ground_y-z))
+            pole_top = (round(cx-z), round(ground_y-29*z))
+            arm_end = (round(cx+7*z), round(ground_y-29*z))
+            pygame.draw.line(self.canvas, (49, 57, 57), base, pole_top, thick)
+            pygame.draw.line(self.canvas, (49, 57, 57), pole_top, arm_end, thick)
+            pygame.draw.line(
+                self.canvas, (143, 151, 133),
+                (pole_top[0]+1, pole_top[1]), arm_end, line
+            )
+            glow = pygame.Rect(
+                round(cx+3*z), round(ground_y-31*z),
+                max(7, round(8*z)), max(5, round(6*z))
+            )
+            pygame.draw.rect(self.canvas, (244, 202, 91), glow.inflate(line*2, line*2))
+            pygame.draw.rect(self.canvas, (255, 239, 167), glow)
+            pygame.draw.rect(self.canvas, (255, 255, 216), glow, line)
             return
 
         if kind == "decor_tree":
-            pygame.draw.polygon(self.canvas, (81, 132, 65), ground)
-            pygame.draw.rect(self.canvas, (108, 74, 43),
-                             (round(cx - 2*z), round(ground_y - 16*z),
-                              max(3, round(4*z)), max(10, round(14*z))))
-            pygame.draw.rect(self.canvas, (37, 101, 58),
-                             (round(cx - 8*z), round(ground_y - 28*z),
-                              max(12, round(16*z)), max(10, round(12*z))))
-            pygame.draw.rect(self.canvas, (68, 143, 73),
-                             (round(cx - 5*z), round(ground_y - 34*z),
-                              max(8, round(10*z)), max(9, round(10*z))))
+            pygame.draw.polygon(self.canvas, (88, 133, 70), ground)
+            pygame.draw.polygon(self.canvas, (48, 91, 56), ground, line)
+            pygame.draw.rect(
+                self.canvas, (104, 71, 45),
+                (round(cx-2*z), round(ground_y-18*z), max(3, round(4*z)), max(16, round(17*z)))
+            )
+            pygame.draw.rect(
+                self.canvas, (64, 48, 39),
+                (round(cx-3*z), round(ground_y-3*z), max(5, round(6*z)), max(2, round(3*z)))
+            )
+            for ox, oy, w, h, color in (
+                (-8,-28,16,10,(35,99,57)), (-6,-35,13,11,(65,137,68)),
+                (-3,-41,8,9,(104,169,76)), (-11,-24,6,6,(54,119,62)),
+                (6,-25,6,6,(45,108,59)),
+            ):
+                pygame.draw.rect(
+                    self.canvas, color,
+                    (round(cx+ox*z), round(ground_y+oy*z),
+                     max(2, round(w*z)), max(2, round(h*z)))
+                )
+            pygame.draw.rect(
+                self.canvas, (154, 197, 91),
+                (round(cx-2*z), round(ground_y-34*z), max(2, round(3*z)), max(2, round(3*z)))
+            )
             return
 
-        height_px = (25 + (level - 1) * 8) * z
-        if kind == "industrial":
-            height_px += 4*z
-        top = [(ground[0][0], round(ground[0][1] - height_px)),
-               (ground[1][0], round(ground[1][1] - height_px)),
-               (ground[2][0], round(ground[2][1] - height_px)),
-               (ground[3][0], round(ground[3][1] - height_px))]
+        level = int(clamp(level, 1, 3))
+        height_px = (25 + (level-1)*7)*z + (3*z if kind == "industrial" else 0)
+        top = [
+            (ground[0][0], round(ground[0][1]-height_px)),
+            (ground[1][0], round(ground[1][1]-height_px)),
+            (ground[2][0], round(ground[2][1]-height_px)),
+            (ground[3][0], round(ground[3][1]-height_px)),
+        ]
         front_left = [ground[3], ground[2], top[2], top[3]]
         front_right = [ground[2], ground[1], top[1], top[2]]
-        colors = {
-            "commercial": ((184, 166, 117), (124, 104, 83), (67, 133, 159)),
-            "industrial": ((111, 119, 116), (76, 83, 85), (121, 132, 131)),
-            "public": ((190, 190, 164), (137, 142, 137), (91, 149, 164)),
-            "logging": ((151, 119, 78), (104, 79, 55), (145, 113, 70)),
+        palettes = {
+            "commercial": ((221,190,130),(153,112,75),(72,151,179)),
+            "industrial": ((150,158,147),(91,101,99),(111,174,184)),
+            "public": ((216,207,174),(144,148,132),(87,152,173)),
+            "logging": ((178,139,87),(120,84,53),(183,142,82)),
         }
-        top_color, side_color, window_color = colors[kind]
+        top_color, side_color, window_color = palettes[kind]
+        dark_side = tuple(max(0,c-24) for c in side_color)
+        pygame.draw.polygon(self.canvas, dark_side, front_right)
         pygame.draw.polygon(self.canvas, side_color, front_left)
-        pygame.draw.polygon(self.canvas, tuple(max(0, c - 18) for c in side_color), front_right)
         pygame.draw.polygon(self.canvas, top_color, top)
-        pygame.draw.polygon(self.canvas, (48, 56, 54), top, max(1, round(z)))
-        for index in range(max(1, width)):
-            wx = round(cx - half_w * 0.42 + index * (half_w * 0.84 / max(1, width - 1)))
-            wy = round(ground_y - height_px * 0.58)
-            pygame.draw.rect(self.canvas, window_color,
-                             (wx - max(2, round(2*z)), wy,
-                              max(3, round(4*z)), max(4, round(6*z))))
-        if kind == "industrial":
-            pygame.draw.rect(self.canvas, (85, 88, 82),
-                             (round(cx + half_w * 0.22), round(ground_y - height_px - 14*z),
-                              max(4, round(6*z)), max(14, round(18*z))))
-        elif kind == "logging":
-            pygame.draw.line(self.canvas, (88, 62, 38),
-                             (round(cx - 4*z), round(ground_y - height_px * 0.42)),
-                             (round(cx + 4*z), round(ground_y - height_px * 0.42)),
-                             max(2, round(2*z)))
-            pygame.draw.circle(self.canvas, (190, 150, 87),
-                               (round(cx), round(ground_y - height_px - 3*z)),
-                               max(2, round(3*z)))
-        elif kind == "public":
-            pygame.draw.rect(self.canvas, (211, 194, 115),
-                             (round(cx - 2*z), round(ground_y - height_px - 8*z),
-                              max(4, round(5*z)), max(4, round(5*z))))
-        elif kind == "logging":
-            progress = self.logging_progress.get((x, y), 0.0)
-            bar = pygame.Rect(
-                round(cx - 9*z), round(ground_y - height_px - 12*z),
-                max(8, round(18*z)), max(2, round(3*z))
+        pygame.draw.polygon(self.canvas, (55,62,56), top, line)
+        pygame.draw.line(
+            self.canvas, tuple(min(255,c+35) for c in side_color),
+            top[3], top[2], line
+        )
+
+        facade_y = round(ground_y-height_px*0.57)
+        window_w, window_h = max(3, round(4*z)), max(4, round(6*z))
+        window_count = max(2, width+1)
+        for index in range(window_count):
+            wx = round(cx-half_w*0.34 + index*(half_w*0.68/max(1,window_count-1)))
+            rect = pygame.Rect(wx, facade_y, window_w, window_h)
+            pygame.draw.rect(self.canvas, (39,66,75), rect.inflate(line,line))
+            pygame.draw.rect(self.canvas, window_color, rect)
+            pygame.draw.line(
+                self.canvas, (188,220,207),
+                (rect.x+line, rect.y+line), (rect.x+line, rect.bottom-line), 1
             )
-            pygame.draw.rect(self.canvas, (37, 43, 42), bar)
-            fill_w = round(
-                bar.width * clamp(progress / LUMBER_CAMP_DURATION_MINUTES, 0.0, 1.0)
+
+        if kind == "commercial":
+            sign = pygame.Rect(
+                round(cx-half_w*0.34), round(ground_y-height_px*0.91),
+                max(12,round(half_w*0.68)), max(4,round(5*z))
             )
-            if fill_w:
+            pygame.draw.rect(self.canvas, (61,77,77), sign.inflate(line,line))
+            pygame.draw.rect(self.canvas, (232,194,107), sign)
+            pygame.draw.rect(
+                self.canvas, (179,77,68),
+                (sign.x+line, sign.y+line, max(3,sign.width//3), max(2,sign.height-line*2))
+            )
+            awning = pygame.Rect(
+                round(cx-half_w*0.36), round(ground_y-height_px*0.30),
+                max(10,round(half_w*0.72)), max(3,round(4*z))
+            )
+            pygame.draw.rect(self.canvas, (172,68,62), awning)
+            stripe_w=max(2,awning.width//6)
+            for stripe in range(0,awning.width,stripe_w*2):
                 pygame.draw.rect(
-                    self.canvas, (124, 187, 106),
-                    (bar.x, bar.y, fill_w, bar.height)
+                    self.canvas,(238,214,157),
+                    (awning.x+stripe,awning.y,min(stripe_w,awning.right-(awning.x+stripe)),awning.height)
                 )
-            pygame.draw.rect(self.canvas, (224, 219, 188), bar, 1)
+            pygame.draw.rect(
+                self.canvas,(47,80,91),
+                (round(cx-3*z),round(ground_y-height_px*0.23),
+                 max(6,round(7*z)),max(8,round(9*z)))
+            )
+            pygame.draw.rect(
+                self.canvas,(88,63,45),
+                (round(cx-4*z),round(ground_y-height_px*0.23),
+                 max(8,round(9*z)),max(2,round(2*z)))
+            )
+
+        elif kind == "industrial":
+            for index in range(3):
+                vx=round(cx-half_w*0.30+index*half_w*0.23)
+                vy=round(ground_y-height_px-4*z)
+                pygame.draw.rect(
+                    self.canvas,(102,115,110),
+                    (vx,vy,max(5,round(7*z)),max(3,round(4*z)))
+                )
+                pygame.draw.line(self.canvas,(207,190,143),(vx,vy),(vx+max(5,round(7*z)),vy),line)
+            chimney_x=round(cx+half_w*0.23)
+            chimney_y=round(ground_y-height_px-21*z)
+            pygame.draw.rect(
+                self.canvas,(82,88,82),
+                (chimney_x,chimney_y,max(5,round(6*z)),max(22,round(24*z)))
+            )
+            pygame.draw.rect(
+                self.canvas,(182,91,66),
+                (chimney_x,chimney_y+round(8*z),max(5,round(6*z)),max(3,round(4*z)))
+            )
+            pygame.draw.rect(
+                self.canvas,(57,63,60),
+                (round(cx-half_w*0.10),round(ground_y-height_px*0.28),
+                 max(9,round(15*z)),max(8,round(11*z)))
+            )
+            for stripe in range(1,4):
+                sx=round(cx-half_w*0.10+stripe*3*z)
+                pygame.draw.line(
+                    self.canvas,(147,159,151),
+                    (sx,round(ground_y-height_px*0.28)),
+                    (sx,round(ground_y-height_px*0.28+10*z)),line
+                )
+            pygame.draw.line(
+                self.canvas,(218,176,103),
+                (round(cx-half_w*0.42),round(ground_y-height_px*0.10)),
+                (round(cx+half_w*0.34),round(ground_y-height_px*0.10)),thick
+            )
+
+        elif kind == "public":
+            pediment = [
+                (round(cx-half_w*0.28),round(ground_y-height_px-2*z)),
+                (round(cx),round(ground_y-height_px-13*z)),
+                (round(cx+half_w*0.28),round(ground_y-height_px-2*z)),
+            ]
+            pygame.draw.polygon(self.canvas,(235,220,174),pediment)
+            pygame.draw.polygon(self.canvas,(122,131,119),pediment,line)
+            col_y=round(ground_y-height_px*0.43)
+            for offset in (-0.24,-0.08,0.08,0.24):
+                px=round(cx+half_w*offset)
+                pygame.draw.rect(
+                    self.canvas,(232,221,181),
+                    (px,col_y,max(2,round(3*z)),max(8,round(12*z)))
+                )
+                pygame.draw.rect(
+                    self.canvas,(117,124,111),
+                    (px-line,col_y,max(3,round(4*z)),line)
+                )
+            pygame.draw.rect(
+                self.canvas,(139,79,60),
+                (round(cx-4*z),round(ground_y-height_px*0.28),
+                 max(7,round(8*z)),max(10,round(12*z)))
+            )
+            pygame.draw.rect(
+                self.canvas,(210,188,113),
+                (round(cx-3*z),round(ground_y-height_px*0.28),
+                 max(2,round(2*z)),max(4,round(5*z)))
+            )
+            pygame.draw.circle(
+                self.canvas,(211,181,110),
+                (round(cx),round(ground_y-height_px-5*z)),max(2,round(3*z))
+            )
+            pygame.draw.line(
+                self.canvas,(76,76,67),
+                (round(cx),round(ground_y-height_px-2*z)),
+                (round(cx),round(ground_y-height_px-7*z)),line
+            )
+            for step in range(3):
+                sy=round(ground_y+(step+1)*2*z)
+                pygame.draw.line(
+                    self.canvas,(214,203,169),
+                    (round(cx-(5+step*2)*z),sy),
+                    (round(cx+(5+step*2)*z),sy),line
+                )
+
+        elif kind == "logging":
+            roof_ridge = [
+                (round(cx-half_w*0.35),round(ground_y-height_px*0.84)),
+                (round(cx),round(ground_y-height_px-8*z)),
+                (round(cx+half_w*0.35),round(ground_y-height_px*0.84)),
+            ]
+            pygame.draw.polygon(self.canvas,(119,73,45),roof_ridge)
+            pygame.draw.line(self.canvas,(218,166,94),roof_ridge[0],roof_ridge[1],thick)
+            pygame.draw.line(self.canvas,(158,104,60),roof_ridge[1],roof_ridge[2],thick)
+            shed=pygame.Rect(
+                round(cx-half_w*0.20),round(ground_y-height_px*0.50),
+                max(9,round(half_w*0.38)),max(7,round(11*z))
+            )
+            pygame.draw.rect(self.canvas,(92,62,43),shed)
+            pygame.draw.rect(self.canvas,(196,150,86),shed,line)
+            for row in range(2):
+                log_y=round(ground_y-height_px*0.20+row*3*z)
+                for col in range(3):
+                    log_x=round(cx+half_w*0.10+col*3*z)
+                    log_rect=pygame.Rect(log_x,log_y,max(5,round(6*z)),max(2,round(2*z)))
+                    pygame.draw.rect(self.canvas,(113,72,42),log_rect)
+                    pygame.draw.circle(
+                        self.canvas,(225,184,112),
+                        (log_rect.right-1,log_rect.centery),max(1,round(z))
+                    )
+            saw_center=(round(cx-half_w*0.27),round(ground_y-height_px*0.25))
+            pygame.draw.circle(self.canvas,(81,94,93),saw_center,max(3,round(4*z)))
+            pygame.draw.circle(self.canvas,(205,205,173),saw_center,max(2,round(3*z)),line)
+            pygame.draw.circle(self.canvas,(77,83,77),saw_center,max(1,round(z)))
+
+            progress=self.logging_progress.get((x,y),0.0)
+            bar=pygame.Rect(
+                round(cx-10*z),round(ground_y-height_px-16*z),
+                max(10,round(20*z)),max(3,round(4*z))
+            )
+            pygame.draw.rect(self.canvas,(37,43,42),bar)
+            fill_w=round(bar.width*clamp(progress/LUMBER_CAMP_DURATION_MINUTES,0.0,1.0))
+            if fill_w:
+                pygame.draw.rect(self.canvas,(124,187,106),(bar.x,bar.y,fill_w,bar.height))
+            pygame.draw.rect(self.canvas,(224,219,188),bar,line)
 
     def draw_mine(self, x: int, y: int) -> None:
         """Draw a small mine derrick with a layer/progress indicator."""
@@ -2752,6 +3022,69 @@ class CityGame:
             self.canvas, (205, 183, 126), crown,
             max(2, round(3 * z))
         )
+        # Pulley housing and hanging ore bucket make the headframe readable.
+        pulley = pygame.Rect(
+            round(cx - 3*z), round(base_y - 25*z),
+            max(6, round(7*z)), max(4, round(5*z))
+        )
+        pygame.draw.rect(self.canvas, (62, 67, 64), pulley)
+        pygame.draw.rect(self.canvas, (210, 184, 126), pulley, max(1, round(z)))
+        pygame.draw.circle(
+            self.canvas, (220, 196, 137),
+            (pulley.centerx, pulley.centery), max(2, round(2*z))
+        )
+        bucket_x = round(cx + 1*z)
+        pygame.draw.line(
+            self.canvas, (48, 53, 52),
+            (bucket_x, round(base_y - 19*z)),
+            (bucket_x, round(base_y - 1*z)), max(1, round(z))
+        )
+        pygame.draw.rect(
+            self.canvas, (113, 88, 60),
+            (bucket_x - max(2, round(2*z)), round(base_y - 4*z),
+             max(5, round(6*z)), max(4, round(5*z)))
+        )
+        pygame.draw.rect(
+            self.canvas, (194, 157, 98),
+            (bucket_x - max(2, round(2*z)), round(base_y - 4*z),
+             max(5, round(6*z)), max(1, round(z)))
+        )
+
+        # Dark shaft entrance and a tiny ore cart sit beside the derrick.
+        entry = pygame.Rect(
+            round(cx - 12*z), round(base_y - 2*z),
+            max(6, round(7*z)), max(6, round(7*z))
+        )
+        pygame.draw.rect(self.canvas, (42, 44, 43), entry)
+        pygame.draw.rect(
+            self.canvas, (121, 91, 60),
+            (entry.x, entry.y, entry.width, max(2, round(2*z)))
+        )
+        cart = pygame.Rect(
+            round(cx + 7*z), round(base_y + 1*z),
+            max(7, round(9*z)), max(4, round(5*z))
+        )
+        pygame.draw.rect(self.canvas, (73, 81, 78), cart)
+        cart_top = [
+            (cart.x, cart.y),
+            (cart.x + max(2, round(2*z)), cart.y - max(2, round(2*z))),
+            (cart.right, cart.y - max(2, round(2*z))),
+            (cart.right, cart.y),
+        ]
+        pygame.draw.polygon(self.canvas, (120, 126, 115), cart_top)
+        for wheel_x in (cart.x + max(1, round(2*z)), cart.right - max(2, round(2*z))):
+            pygame.draw.circle(
+                self.canvas, (44, 48, 46),
+                (wheel_x, cart.bottom), max(1, round(2*z))
+            )
+        for ore_x, ore_y in (
+            (cart.x + round(2*z), cart.y - round(2*z)),
+            (cart.x + round(5*z), cart.y - round(3*z)),
+        ):
+            pygame.draw.rect(
+                self.canvas, (139, 143, 133),
+                (ore_x, ore_y, max(2, round(3*z)), max(2, round(3*z)))
+            )
 
         # Progress bar: each completed bar moves the site to the next stratum.
         bar = pygame.Rect(
@@ -3374,17 +3707,12 @@ class CityGame:
                     label, self.remove_mode == mode, small=True
                 )
 
-        self.button(
-            pygame.Rect(373, 294, 57, 23), "R 회전",
-            self.tool == "road" and self.selected_road_tile is not None,
-            small=True
-        )
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
-        self.button(pygame.Rect(434, 294, 80, 23), "땅 확장", small=True)
+        self.button(pygame.Rect(373, 294, 88, 23), "땅 확장", small=True)
         self.text(
             self.canvas, f"{cost_text} · {self.expand_level}/4",
-            474, 326, 9, C["gold"], center=True
+            417, 326, 9, C["gold"], center=True
         )
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
         hint = TOOL_HINTS.get(self.tool, "")
@@ -3393,12 +3721,14 @@ class CityGame:
                 f"제거: {REMOVE_MODE_HINTS[self.remove_mode]} "
                 "· [ ] 또는 하단 버튼으로 변경"
             )
+        elif self.tool == "road":
+            hint = "도로: 드래그 건설 · 기존 도로 클릭 후 R 회전 · 물 위로 연결하면 다리"
         elif self.tool == "house":
             hint = "건설: 빈 땅 클릭 → 건물 선택 → 건물 위에서 마우스를 놓아 예약 · G 업그레이드"
         self.text(self.canvas, hint, 10, 327, 8, C["text"])
         self.text(
             self.canvas,
-            "Q/E 지도 회전   C 추적   U 지층 조사   G 건물 업그레이드",
+            "Q/E 지도 회전   C 추적   U 지층 조사   G 업그레이드   R 도로 회전",
             10, 344, 8, C["muted"]
         )
 
@@ -3460,10 +3790,7 @@ class CityGame:
                         if tx <= x <= tx + 43:
                             self.set_remove_mode(REMOVE_MODE_OPTIONS[index][0])
                             return
-                if 373 <= x <= 430:
-                    self.toggle_road_direction()
-                    return
-            if 434 <= x <= 514 and 294 <= y <= 317:
+            if 373 <= x <= 461 and 294 <= y <= 317:
                 self.expand_land()
                 return
             return
@@ -3485,7 +3812,7 @@ class CityGame:
             return
         if self.tool == "road" and (x, y) in self.roads:
             self.selected_road_tile = (x, y)
-            self.notify("설치된 도로를 선택했어요. R 또는 [R 회전]으로 방향을 바꿔요.", 2.5)
+            self.notify("도로 타일을 선택했어요. R 키로 중앙선 방향을 90도 회전해요.", 2.5)
             return
         if self.selected_road_tile != (x, y):
             self.selected_road_tile = None
@@ -3589,7 +3916,10 @@ class CityGame:
         self.tool_drag_visited.clear()
 
     def toggle_road_direction(self) -> None:
-        """Rotate a selected, already-installed road tile."""
+        """Rotate a selected, already-installed road tile while in road mode."""
+        if self.tool != "road":
+            self.notify("F3 도로 모드에서 기존 도로를 선택한 뒤 R을 누르세요.", 2.3)
+            return
         tile = self.selected_road_tile
         if tile is None or tile not in self.roads:
             self.notify("방향을 바꿀 기존 도로 타일을 먼저 클릭해 선택하세요.", 2.5)
@@ -3665,7 +3995,7 @@ class CityGame:
                         self.select_tool("house")
                     elif event.key == pygame.K_F8:
                         self.select_tool("restore")
-                    elif event.key == pygame.K_r:
+                    elif event.key == pygame.K_r and self.tool == "road":
                         self.toggle_road_direction()
                     elif event.key == pygame.K_q:
                         self.rotate_map(-1)
