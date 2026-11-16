@@ -19,5 +19,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Compile main.py
-        run: python -m py_compile main.py
+      - name: Compile game and protocol modules
+        run: python -m py_compile main.py multiplayer_protocol.py
+
+      - name: Run protocol unit tests
+        run: python -m unittest discover -s tests -v
