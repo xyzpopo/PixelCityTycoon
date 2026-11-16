@@ -3022,6 +3022,69 @@ class CityGame:
             self.canvas, (205, 183, 126), crown,
             max(2, round(3 * z))
         )
+        # Pulley housing and hanging ore bucket make the headframe readable.
+        pulley = pygame.Rect(
+            round(cx - 3*z), round(base_y - 25*z),
+            max(6, round(7*z)), max(4, round(5*z))
+        )
+        pygame.draw.rect(self.canvas, (62, 67, 64), pulley)
+        pygame.draw.rect(self.canvas, (210, 184, 126), pulley, max(1, round(z)))
+        pygame.draw.circle(
+            self.canvas, (220, 196, 137),
+            (pulley.centerx, pulley.centery), max(2, round(2*z))
+        )
+        bucket_x = round(cx + 1*z)
+        pygame.draw.line(
+            self.canvas, (48, 53, 52),
+            (bucket_x, round(base_y - 19*z)),
+            (bucket_x, round(base_y - 1*z)), max(1, round(z))
+        )
+        pygame.draw.rect(
+            self.canvas, (113, 88, 60),
+            (bucket_x - max(2, round(2*z)), round(base_y - 4*z),
+             max(5, round(6*z)), max(4, round(5*z)))
+        )
+        pygame.draw.rect(
+            self.canvas, (194, 157, 98),
+            (bucket_x - max(2, round(2*z)), round(base_y - 4*z),
+             max(5, round(6*z)), max(1, round(z)))
+        )
+
+        # Dark shaft entrance and a tiny ore cart sit beside the derrick.
+        entry = pygame.Rect(
+            round(cx - 12*z), round(base_y - 2*z),
+            max(6, round(7*z)), max(6, round(7*z))
+        )
+        pygame.draw.rect(self.canvas, (42, 44, 43), entry)
+        pygame.draw.rect(
+            self.canvas, (121, 91, 60),
+            (entry.x, entry.y, entry.width, max(2, round(2*z)))
+        )
+        cart = pygame.Rect(
+            round(cx + 7*z), round(base_y + 1*z),
+            max(7, round(9*z)), max(4, round(5*z))
+        )
+        pygame.draw.rect(self.canvas, (73, 81, 78), cart)
+        cart_top = [
+            (cart.x, cart.y),
+            (cart.x + max(2, round(2*z)), cart.y - max(2, round(2*z))),
+            (cart.right, cart.y - max(2, round(2*z))),
+            (cart.right, cart.y),
+        ]
+        pygame.draw.polygon(self.canvas, (120, 126, 115), cart_top)
+        for wheel_x in (cart.x + max(1, round(2*z)), cart.right - max(2, round(2*z))):
+            pygame.draw.circle(
+                self.canvas, (44, 48, 46),
+                (wheel_x, cart.bottom), max(1, round(2*z))
+            )
+        for ore_x, ore_y in (
+            (cart.x + round(2*z), cart.y - round(2*z)),
+            (cart.x + round(5*z), cart.y - round(3*z)),
+        ):
+            pygame.draw.rect(
+                self.canvas, (139, 143, 133),
+                (ore_x, ore_y, max(2, round(3*z)), max(2, round(3*z)))
+            )
 
         # Progress bar: each completed bar moves the site to the next stratum.
         bar = pygame.Rect(
