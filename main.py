@@ -3,6 +3,7 @@ A small isometric city-builder prototype using Pygame and procedural pixel-style
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 from array import array
@@ -175,6 +176,26 @@ def clamp(value: float, low: float, high: float) -> float:
 
 def tile_key(x: int, y: int) -> str:
     return f"{x},{y}"
+
+
+def valid_tile_set(raw: object) -> Set[Tuple[int, int]]:
+    """Parse a save-file tile list without trusting its shape or coordinates."""
+    if not isinstance(raw, list):
+        return set()
+    result: Set[Tuple[int, int]] = set()
+    for entry in raw:
+        if (isinstance(entry, (list, tuple)) and len(entry) == 2
+                and type(entry[0]) is int and type(entry[1]) is int
+                and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H):
+            result.add((entry[0], entry[1]))
+    return result
+
+
+def safe_saved_int(value: object, default: int, low: int, high: int) -> int:
+    """Read a bounded integer from untrusted or older save data."""
+    if type(value) is not int:
+        return default
+    return max(low, min(high, value))
 
 
 @dataclass
@@ -872,6 +893,7 @@ class CityGame:
         self, kind: str, x: int, y: int, allow_worker: bool = False,
         ignore_order: Optional[Tuple[str, int, int]] = None,
         require_forest: bool = True,
+        require_road: bool = True,
     ) -> bool:
         """Validate an entire multi-tile footprint, not just its anchor tile."""
         spec = CITY_OBJECT_DEFS.get(kind)
@@ -906,7 +928,7 @@ class CityGame:
                 if footprint & self.footprint_for(queued_tool, qx, qy):
                     return False
 
-        if spec["road"] and not self.footprint_has_road(footprint):
+        if spec["road"] and require_road and not self.footprint_has_road(footprint):
             return False
         if kind == "logging" and require_forest:
             nearby_trees = {
@@ -1871,15 +1893,43 @@ class CityGame:
         }
         try:
             SAVE_DIR.mkdir(parents=True, exist_ok=True)
-            SAVE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.notify("도시를 저장했어요.", 3)
+            temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
+            serialized = json.dumps(
+                data, ensure_ascii=False, indent=2, allow_nan=False
+            )
+            temporary_file.write_text(serialized, encoding="utf-8")
+            os.replace(temporary_file, SAVE_FILE)
+            self.notify("도시를 안전하게 저장했어요.", 3)
         except OSError as exc:
             self.notify(f"저장 실패: {exc}", 4)
 
     def load_game(self) -> None:
+        state_fields = (
+            "seed", "rng", "terrain", "trees", "rocks", "roads",
+            "road_directions", "road_direction", "selected_road_tile",
+            "map_rotation", "camera_follow_worker", "underground_view",
+            "underground_layer", "underground_mined", "houses", "house_levels",
+            "city_objects", "logging_progress", "mines", "expand_level",
+            "money", "population", "wood", "stone", "day", "game_minutes",
+            "worker_x", "worker_y", "worker_facing", "worker_path",
+            "worker_move_progress", "worker_moved", "worker_action",
+            "worker_action_timer", "worker_action_elapsed",
+            "worker_action_hit_played", "worker_pending_action", "work_queue",
+            "work_path_active", "tool", "camera_x", "camera_y",
+            "tutorial_step", "tutorial_done", "tutorial_removed",
+            "tutorial_roads", "tutorial_house_built",
+        )
+        previous_state = {
+            name: copy.deepcopy(getattr(self, name)) for name in state_fields
+        }
         try:
             data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
-            self.generate_world(int(data["seed"]))
+            if not isinstance(data, dict):
+                raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
+            saved_seed = data.get("seed")
+            if type(saved_seed) is not int:
+                raise ValueError("저장 파일의 지도 시드가 올바르지 않아요.")
+            self.generate_world(saved_seed)
             saved_rotation = data.get("map_rotation", 0)
             self.map_rotation = saved_rotation % 4 if type(saved_rotation) is int else 0
             self.camera_follow_worker = bool(data.get("camera_follow_worker", False))
@@ -1908,9 +1958,9 @@ class CityGame:
                                 self.terrain[x][y].terrain = "mountain"
                             elif height == 0 and self.terrain[x][y].terrain == "mountain":
                                 self.terrain[x][y].terrain = "grass"
-            self.trees = {tuple(p) for p in data.get("trees", [])}
-            self.rocks = {tuple(p) for p in data.get("rocks", [])}
-            self.roads = {tuple(p) for p in data.get("roads", [])}
+            self.trees = valid_tile_set(data.get("trees", []))
+            self.rocks = valid_tile_set(data.get("rocks", []))
+            self.roads = valid_tile_set(data.get("roads", []))
             self.road_direction = data.get("road_direction", "x")
             if self.road_direction not in ("x", "y"):
                 self.road_direction = "x"
@@ -1923,7 +1973,7 @@ class CityGame:
                             and 0 <= entry[0] < MAP_W and 0 <= entry[1] < MAP_H
                             and entry[2] in ("x", "y")):
                         self.road_directions[(entry[0], entry[1])] = entry[2]
-            self.houses = {tuple(p) for p in data.get("houses", [])}
+            self.houses = valid_tile_set(data.get("houses", []))
             self.house_levels = {}
             saved_house_levels = data.get("house_levels", [])
             if isinstance(saved_house_levels, list):
@@ -1952,7 +2002,7 @@ class CityGame:
                             and pos not in self.roads and pos not in self.houses
                             and pos not in self.trees and pos not in self.rocks):
                         self.mines[pos] = (entry[2], float(entry[3]))
-            self.expand_level = int(clamp(int(data.get("expand_level", 0)), 0, 4))
+            self.expand_level = safe_saved_int(data.get("expand_level", 0), 0, 0, 4)
             saved_city_objects = data.get("city_objects", [])
             if isinstance(saved_city_objects, list):
                 for entry in saved_city_objects:
@@ -1961,7 +2011,9 @@ class CityGame:
                             or entry[2] not in CITY_OBJECT_DEFS or type(entry[3]) is not int):
                         continue
                     x, y, kind, level = entry
-                    if self.can_build_city_object(kind, x, y, require_forest=False):
+                    if self.can_build_city_object(
+                        kind, x, y, require_forest=False, require_road=False
+                    ):
                         self.city_objects[(x, y)] = {
                             "type": kind, "level": int(clamp(level, 1, 3))
                         }
@@ -1979,12 +2031,12 @@ class CityGame:
             for anchor, object_data in self.city_objects.items():
                 if object_data.get("type") == "logging":
                     self.logging_progress.setdefault(anchor, 0.0)
-            self.money = int(data.get("money", 100000))
-            self.population = int(data.get("population", 0))
-            self.wood = int(data.get("wood", 0))
-            self.stone = int(data.get("stone", 0))
-            self.day = int(data.get("day", 1))
-            self.game_minutes = int(data.get("game_minutes", 480))
+            self.money = safe_saved_int(data.get("money", 100000), 100000, -1000000000, 1000000000)
+            self.population = safe_saved_int(data.get("population", 0), 0, 0, 1000000)
+            self.wood = safe_saved_int(data.get("wood", 0), 0, 0, 1000000000)
+            self.stone = safe_saved_int(data.get("stone", 0), 0, 0, 1000000000)
+            self.day = safe_saved_int(data.get("day", 1), 1, 1, 1000000000)
+            self.game_minutes = safe_saved_int(data.get("game_minutes", 480), 480, 0, 1439)
             worker_pos = data.get("worker", [MAP_W // 2, MAP_H // 2])
             if (isinstance(worker_pos, list) and len(worker_pos) == 2
                     and all(isinstance(v, int) for v in worker_pos)
@@ -2047,10 +2099,10 @@ class CityGame:
                     if tool == "road":
                         self.road_directions.setdefault((x, y), self.infer_road_axis(x, y))
 
-            self.tutorial_step = int(data.get("tutorial_step", 0))
+            self.tutorial_step = safe_saved_int(data.get("tutorial_step", 0), 0, 0, 20)
             self.tutorial_done = bool(data.get("tutorial_done", False))
-            self.tutorial_removed = int(data.get("tutorial_removed", 0))
-            self.tutorial_roads = int(data.get("tutorial_roads", 0))
+            self.tutorial_removed = safe_saved_int(data.get("tutorial_removed", 0), 0, 0, 1000000)
+            self.tutorial_roads = safe_saved_int(data.get("tutorial_roads", 0), 0, 0, 1000000)
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
             self.center_camera()
             if self.camera_follow_worker:
@@ -2058,8 +2110,10 @@ class CityGame:
             self.notify("저장된 도시를 불러왔어요.", 3)
         except FileNotFoundError:
             self.notify("저장 파일이 없어요. 먼저 저장해 주세요.", 3)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            self.notify(f"불러오기 실패: {exc}", 4)
+        except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            for name, value in previous_state.items():
+                setattr(self, name, value)
+            self.notify(f"불러오기 실패 · 기존 도시는 유지했어요: {exc}", 4)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -3776,10 +3830,9 @@ class CityGame:
                 self.worker_action_hit_played = False
         self.update_work_queue()
         # Accelerated clock: six in-game minutes pass per real second.
-        now = time.time()
-        elapsed = now - self.last_clock_tick
-        self.last_clock_tick = now
-        game_elapsed_minutes = elapsed * 6
+        # Cap one frame's contribution so resuming a minimized/stalled window
+        # cannot instantly consume many in-game hours or exhaust a forest.
+        game_elapsed_minutes = clamp(dt, 0.0, 0.25) * 6
         self.game_minutes += game_elapsed_minutes
         self.update_mines(game_elapsed_minutes)
         self.update_logging_camps(game_elapsed_minutes)
