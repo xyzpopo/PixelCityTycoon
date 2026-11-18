@@ -3,6 +3,7 @@ A small isometric city-builder prototype using Pygame and procedural pixel-style
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import math
@@ -22,9 +23,18 @@ import pygame
 # -----------------------------------------------------------------------------
 APP_NAME = "Pixel City Tycoon"
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-SAVE_DIR = Path.home() / "Documents" / "PixelCityTycoon" / "saves"
-SAVE_DIR.mkdir(parents=True, exist_ok=True)
-SAVE_FILE = SAVE_DIR / "city_save.json"
+IS_WEB = sys.platform == "emscripten"
+WEB_SAVE_KEY = "pixel-city-tycoon-save-v1"
+
+# Native builds use the user's Documents folder. Browser builds use localStorage
+# so that saves remain available across page reloads on the same browser.
+if IS_WEB:
+    SAVE_DIR = None
+    SAVE_FILE = None
+else:
+    SAVE_DIR = Path.home() / "Documents" / "PixelCityTycoon" / "saves"
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    SAVE_FILE = SAVE_DIR / "city_save.json"
 
 LOGICAL_W, LOGICAL_H = 640, 360
 WINDOW_SCALE = 2
@@ -1938,20 +1948,30 @@ class CityGame:
             "tutorial_roads": self.tutorial_roads,
             "tutorial_house_built": self.tutorial_house_built,
         }
-        temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
+        temporary_file = None
         try:
-            SAVE_DIR.mkdir(parents=True, exist_ok=True)
             serialized = json.dumps(
                 data, ensure_ascii=False, indent=2, allow_nan=False
             )
-            temporary_file.write_text(serialized, encoding="utf-8")
-            os.replace(temporary_file, SAVE_FILE)
-            self.notify("도시를 안전하게 저장했어요.", 3)
+            if IS_WEB:
+                try:
+                    from platform import window
+                    window.localStorage.setItem(WEB_SAVE_KEY, serialized)
+                except Exception as storage_error:
+                    raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
+                self.notify("브라우저에 도시를 저장했어요.", 3)
+            else:
+                temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
+                SAVE_DIR.mkdir(parents=True, exist_ok=True)
+                temporary_file.write_text(serialized, encoding="utf-8")
+                os.replace(temporary_file, SAVE_FILE)
+                self.notify("도시를 안전하게 저장했어요.", 3)
         except (OSError, TypeError, ValueError) as exc:
-            try:
-                temporary_file.unlink(missing_ok=True)
-            except OSError:
-                pass
+            if temporary_file is not None:
+                try:
+                    temporary_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
             self.notify(f"저장 실패 · 기존 저장 파일은 유지했어요: {exc}", 4)
 
     def load_game(self) -> None:
@@ -1977,7 +1997,17 @@ class CityGame:
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
         }
         try:
-            data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
+            if IS_WEB:
+                try:
+                    from platform import window
+                    saved_text = window.localStorage.getItem(WEB_SAVE_KEY)
+                except Exception as storage_error:
+                    raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
+                if saved_text is None:
+                    raise FileNotFoundError
+                data = json.loads(str(saved_text))
+            else:
+                data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
             saved_seed = data.get("seed")
@@ -4304,6 +4334,7 @@ class CityGame:
         pygame.display.flip()
 
     def run(self) -> None:
+        """Synchronous desktop loop used by the Windows EXE build."""
         while self.running:
             dt = min(self.clock.tick(60) / 1000.0, 0.25)
             self.process_events()
@@ -4311,11 +4342,27 @@ class CityGame:
             self.draw()
         pygame.quit()
 
+    async def run_web(self) -> None:
+        """Async browser loop; yielding each frame keeps the WASM page responsive."""
+        previous_frame = time.perf_counter()
+        while self.running:
+            now = time.perf_counter()
+            dt = min(max(now - previous_frame, 0.0), 0.25)
+            previous_frame = now
+            self.process_events()
+            self.update(dt)
+            self.draw()
+            await asyncio.sleep(0)
+        pygame.quit()
+
 
 def main() -> None:
     try:
         game = CityGame()
-        game.run()
+        if IS_WEB:
+            asyncio.run(game.run_web())
+        else:
+            game.run()
     except Exception as exc:
         # Keep a useful error message visible when launched from a terminal.
         print(f"{APP_NAME} failed to start: {exc}")
