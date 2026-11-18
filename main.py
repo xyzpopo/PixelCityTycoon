@@ -333,6 +333,10 @@ class CityGame:
     # Fonts / UI helpers
     # ------------------------------------------------------------------
     def _find_font(self) -> Optional[str]:
+        # Ship the same Korean-capable font with desktop and browser builds.
+        bundled_font = BASE_DIR / "assets" / "fonts" / "NotoSansKR[wght].ttf"
+        if bundled_font.is_file():
+            return str(bundled_font)
         names = ["malgungothic", "nanumgothic", "noto sans cjk kr", "arial", "dejavusans"]
         for name in names:
             path = pygame.font.match_font(name)
