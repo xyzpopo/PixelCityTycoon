@@ -222,6 +222,16 @@ class CityGame:
         pygame.display.set_caption(APP_NAME + " - Prototype 0.1")
         self.window = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.canvas = pygame.Surface((LOGICAL_W, LOGICAL_H))
+        # Player-authored house sprites (transparent PNGs, one image per level).
+        self.house_sprites: Dict[int, pygame.Surface] = {}
+        self.house_sprite_cache: Dict[Tuple[int, int], pygame.Surface] = {}
+        for house_level in range(1, 4):
+            sprite_path = BASE_DIR / "assets" / "buildings" / f"house_lv{house_level}.png"
+            try:
+                self.house_sprites[house_level] = pygame.image.load(str(sprite_path)).convert_alpha()
+            except (pygame.error, OSError):
+                # Keep the procedural drawing as a fallback if an asset is missing.
+                pass
         # Reuse the transparent cliff layer instead of allocating a new surface each frame.
         self.cliff_layer = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         self.clock = pygame.time.Clock()
@@ -2562,7 +2572,35 @@ class CityGame:
             )
 
     def draw_house(self, x: int, y: int, level: int = 1) -> None:
-        """Draw a compact pixel-art home with visible upgrades at each level."""
+        """Draw the authored house sprite for the selected upgrade level."""
+        cx, cy = self.tile_to_screen(x, y)
+        z = self.zoom
+        level = int(clamp(level, 1, 3))
+        sprite = self.house_sprites.get(level)
+        if sprite is not None:
+            cache_key = (level, self.zoom_index)
+            scaled = self.house_sprite_cache.get(cache_key)
+            if scaled is None:
+                size = (
+                    max(1, round(sprite.get_width() * z)),
+                    max(1, round(sprite.get_height() * z)),
+                )
+                # pygame.transform.scale keeps the pixel-art edges crisp.
+                scaled = pygame.transform.scale(sprite, size)
+                self.house_sprite_cache[cache_key] = scaled
+
+            # The sprite's bottom-center sits on the bottom point of its 1x1
+            # isometric footprint (33x17 tile guide, 33x30 house canvas).
+            draw_x = round(cx - scaled.get_width() / 2)
+            draw_y = round(cy + (TILE_H * z / 2) - scaled.get_height())
+            self.canvas.blit(scaled, (draw_x, draw_y))
+            return
+
+        # Fallback for source checkouts that do not yet contain house PNGs.
+        self._draw_house_procedural(x, y, level)
+
+    def _draw_house_procedural(self, x: int, y: int, level: int = 1) -> None:
+        """Fallback procedural house used when a sprite asset is unavailable."""
         cx, cy = self.tile_to_screen(x, y)
         z = self.zoom
         level = int(clamp(level, 1, 3))

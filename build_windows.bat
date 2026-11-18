@@ -33,7 +33,7 @@ if errorlevel 1 goto failed
 
 echo.
 echo [3/3] Building EXE...
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon main.py
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets\buildings;assets\buildings" main.py
 if errorlevel 1 goto failed
 
 if not exist "dist\PixelCityTycoon.exe" goto missing_exe
