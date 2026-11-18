@@ -54,8 +54,8 @@ jobs:
           path: build/web
 
   deploy:
-    # Keep deployment opt-in until the repository's Pages plan/settings are confirmed.
-    if: github.event_name != 'pull_request' && vars.ENABLE_GITHUB_PAGES == 'true'
+    # Deploy automatically for pushes/manual runs; never deploy pull-request builds.
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
