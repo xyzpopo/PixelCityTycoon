@@ -30,9 +30,15 @@ The generated site is placed in `build/web`. The same source code is used for bo
 
 ### GitHub Pages
 
-The `Build and deploy web game` workflow builds the web version for pull requests. After changes are merged into `main`, it also deploys the generated site to GitHub Pages.
+The workflow always builds the browser version and uploads it as a workflow artifact. Publishing is deliberately opt-in because GitHub Pages eligibility depends on repository visibility and the account plan:
 
-For the first deployment, GitHub Pages must allow **GitHub Actions** as its deployment source. The workflow attempts to enable Pages automatically; if repository permissions prevent that, a repository administrator must select **Settings → Pages → Build and deployment → Source → GitHub Actions** once.
+- GitHub Free supports Pages for public repositories.
+- A private repository needs GitHub Pro, GitHub Team, or an Enterprise plan.
+- A published Pages site is public on the internet, even when its source repository is private.
+
+The current game repository is private, so the first automatic deployment was rejected by GitHub before the publish step. The build itself succeeded. To enable Pages deployment, first confirm that the account plan supports Pages for this private repository (or intentionally make the repository public). Then create the repository Actions variable `ENABLE_GITHUB_PAGES=true` under **Settings → Secrets and variables → Actions → Variables**. The workflow will then attempt deployment. If Pages still needs initial setup, select **Settings → Pages → Build and deployment → Source → GitHub Actions**.
+
+Do not make the source repository public just to remove this deployment error unless you explicitly intend to publish the source code.
 
 ### Browser compatibility
 
