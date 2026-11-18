@@ -32,8 +32,15 @@ echo [2/3] Installing pygame-ce and PyInstaller...
 if errorlevel 1 goto failed
 
 echo.
-echo [3/3] Building EXE...
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets\buildings;assets\buildings" main.py
+echo [3/4] Downloading Korean font...
+if not exist "assets\fonts" mkdir "assets\fonts"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%%5Bwght%%5D.ttf' -OutFile 'assets\fonts\NotoSansKR[wght].ttf'"
+if errorlevel 1 goto failed
+if not exist "assets\fonts\NotoSansKR[wght].ttf" goto failed
+
+echo.
+echo [4/4] Building EXE...
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets\buildings;assets\buildings" --add-data "assets\fonts;assets\fonts" main.py
 if errorlevel 1 goto failed
 
 if not exist "dist\PixelCityTycoon.exe" goto missing_exe

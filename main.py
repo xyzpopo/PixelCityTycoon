@@ -309,6 +309,8 @@ class CityGame:
         self.work_path_active = False
         self.dragging = False  # Middle-button camera panning.
         self.last_mouse = (0, 0)
+        self.touch_input_active = False
+        self.active_finger_id: Optional[int] = None
         self.tool_dragging = False
         self.tool_drag_start_tile: Optional[Tuple[int, int]] = None
         self.tool_drag_last_tile: Optional[Tuple[int, int]] = None
@@ -333,6 +335,10 @@ class CityGame:
     # Fonts / UI helpers
     # ------------------------------------------------------------------
     def _find_font(self) -> Optional[str]:
+        # Ship the same Korean-capable font with desktop and browser builds.
+        bundled_font = BASE_DIR / "assets" / "fonts" / "NotoSansKR[wght].ttf"
+        if bundled_font.is_file():
+            return str(bundled_font)
         names = ["malgungothic", "nanumgothic", "noto sans cjk kr", "arial", "dejavusans"]
         for name in names:
             path = pygame.font.match_font(name)
@@ -3783,6 +3789,7 @@ class CityGame:
             417, 326, 9, C["gold"], center=True
         )
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
+        self.draw_virtual_keys()
         hint = TOOL_HINTS.get(self.tool, "")
         if self.tool == "remove":
             hint = (
@@ -3832,9 +3839,114 @@ class CityGame:
     def logical_mouse(self, pos: Tuple[int, int]) -> Tuple[int, int]:
         return pos[0] // WINDOW_SCALE, pos[1] // WINDOW_SCALE
 
+    def virtual_key_buttons(self) -> List[Tuple[pygame.Rect, int, str]]:
+        """Return context-sensitive on-screen keycaps after touch input is detected."""
+        if not self.touch_input_active or self.modal_seed:
+            return []
+
+        keys: List[Tuple[str, int]] = [("Q", pygame.K_q), ("E", pygame.K_e)]
+        road_selected = (
+            self.tool == "road"
+            and self.selected_road_tile is not None
+            and self.selected_road_tile in self.roads
+        )
+        upgrade_available = False
+        if self.tool == "house" and self.selected_structure_anchor is not None:
+            found = self.city_object_at(*self.selected_structure_anchor)
+            upgrade_available = bool(
+                found is not None
+                and found[1] in UPGRADABLE_OBJECTS
+                and found[2] < 3
+            )
+
+        if road_selected:
+            keys.extend([("C", pygame.K_c), ("U", pygame.K_u), ("R", pygame.K_r)])
+        elif upgrade_available:
+            keys.extend([("C", pygame.K_c), ("U", pygame.K_u), ("G", pygame.K_g)])
+        elif self.tool in ("remove", "house") or self.underground_view:
+            keys.extend([
+                ("[", pygame.K_LEFTBRACKET), ("]", pygame.K_RIGHTBRACKET),
+                ("C", pygame.K_c), ("U", pygame.K_u)
+            ])
+        else:
+            keys.extend([("C", pygame.K_c), ("U", pygame.K_u)])
+
+        width, height, gap = 25, 23, 2
+        start_x = LOGICAL_W - 8 - len(keys) * width - (len(keys) - 1) * gap
+        return [
+            (pygame.Rect(start_x + index * (width + gap), 294, width, height), key, label)
+            for index, (label, key) in enumerate(keys)
+        ]
+
+    def draw_virtual_keys(self) -> None:
+        """Draw small keycaps for the shortcuts currently useful on a touch device."""
+        for rect, _key, label in self.virtual_key_buttons():
+            pygame.draw.rect(self.canvas, (24, 32, 37), rect)
+            pygame.draw.rect(self.canvas, C["gold"], rect, 1)
+            self.text(self.canvas, label, rect.centerx, rect.centery, 10, C["gold"], center=True)
+
+    def virtual_key_at(self, pos: Tuple[int, int]) -> Optional[int]:
+        for rect, key, _label in self.virtual_key_buttons():
+            if rect.collidepoint(pos):
+                return key
+        return None
+
+    def queue_virtual_key(self, key: int) -> None:
+        """Send a virtual key through pygame's normal KEYDOWN handling path."""
+        pygame.event.post(pygame.event.Event(
+            pygame.KEYDOWN, key=key, mod=pygame.KMOD_NONE, unicode=""
+        ))
+
+    def handle_touch_down(self, pos: Tuple[int, int]) -> None:
+        """Route a touch press through the same tile and UI handlers as a mouse press."""
+        if self.modal_seed:
+            return
+        hit = self.build_palette_hit_test(pos)
+        if self.build_palette_open and hit is not None:
+            self.build_palette_dragging = True
+            self.build_palette_pressed_index = hit
+            self.build_palette_hover_index = hit
+            return
+        if self.build_palette_open:
+            panel, _cells = self.build_palette_geometry()
+            if panel.collidepoint(pos):
+                return
+            self.close_build_palette()
+        if VIEW_RECT.collidepoint(*pos):
+            if self.tool == "house" and not self.underground_view:
+                tile = self.screen_to_tile(*pos)
+                if tile is not None:
+                    self.open_build_palette(tile)
+            else:
+                self.begin_tool_drag(pos)
+        else:
+            self.handle_click(pos)
+
+    def handle_touch_motion(self, pos: Tuple[int, int]) -> None:
+        if self.build_palette_open:
+            self.build_palette_hover_index = self.build_palette_hit_test(pos)
+        if self.tool_dragging:
+            self.update_tool_drag(pos)
+
+    def handle_touch_up(self, pos: Tuple[int, int]) -> None:
+        if self.build_palette_dragging:
+            hit = self.build_palette_hit_test(pos)
+            if hit is not None:
+                self.choose_building_from_palette(hit)
+            else:
+                self.build_palette_dragging = False
+                self.build_palette_pressed_index = None
+                self.build_palette_hover_index = None
+        elif self.tool_dragging:
+            self.finish_tool_drag(pos)
+
     def handle_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
         if self.modal_seed:
+            return
+        virtual_key = self.virtual_key_at(pos)
+        if virtual_key is not None:
+            self.queue_virtual_key(virtual_key)
             return
         if y <= TOP_H:
             if 531 <= x <= 570 and 4 <= y <= 27:
@@ -4113,7 +4225,37 @@ class CityGame:
                         self.save_game()
                     elif event.key == pygame.K_F9:
                         self.load_game()
+            elif event.type == pygame.FINGERDOWN:
+                if self.active_finger_id is not None:
+                    continue
+                self.touch_input_active = True
+                self.active_finger_id = event.finger_id
+                logical = (
+                    int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
+                    int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
+                )
+                if self.virtual_key_at(logical) is not None:
+                    self.handle_click(logical)
+                else:
+                    self.handle_touch_down(logical)
+            elif event.type == pygame.FINGERMOTION:
+                if self.active_finger_id == event.finger_id:
+                    logical = (
+                        int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
+                        int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
+                    )
+                    self.handle_touch_motion(logical)
+            elif event.type == pygame.FINGERUP:
+                if self.active_finger_id == event.finger_id:
+                    logical = (
+                        int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
+                        int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
+                    )
+                    self.handle_touch_up(logical)
+                    self.active_finger_id = None
             elif event.type == pygame.MOUSEBUTTONDOWN:
+                if getattr(event, "touch", False):
+                    continue
                 logical = self.logical_mouse(event.pos)
                 if self.modal_seed:
                     continue
@@ -4149,6 +4291,8 @@ class CityGame:
                     if VIEW_RECT.collidepoint(*logical):
                         self.change_zoom(-1, logical)
             elif event.type == pygame.MOUSEBUTTONUP:
+                if getattr(event, "touch", False):
+                    continue
                 logical = self.logical_mouse(event.pos)
                 if event.button == 1 and self.build_palette_dragging:
                     hit = self.build_palette_hit_test(logical)
@@ -4163,6 +4307,8 @@ class CityGame:
                 elif event.button == 2:
                     self.dragging = False
             elif event.type == pygame.MOUSEMOTION:
+                if getattr(event, "touch", False):
+                    continue
                 logical = self.logical_mouse(event.pos)
                 if self.build_palette_open:
                     self.build_palette_hover_index = self.build_palette_hit_test(logical)

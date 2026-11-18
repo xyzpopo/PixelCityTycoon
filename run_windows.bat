@@ -16,6 +16,13 @@ py -3 -m venv .venv
 if errorlevel 1 goto failed
 
 :venv_ready
+if not exist "assets\fonts\NotoSansKR[wght].ttf" (
+    echo Downloading Korean font...
+    if not exist "assets\fonts" mkdir "assets\fonts"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%%5Bwght%%5D.ttf' -OutFile 'assets\fonts\NotoSansKR[wght].ttf'"
+    if errorlevel 1 goto failed
+)
+
 echo Installing or checking pygame-ce...
 ".venv\Scripts\python.exe" -m pip install --upgrade pip
 if errorlevel 1 goto failed

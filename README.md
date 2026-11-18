@@ -36,10 +36,8 @@ The workflow always builds the browser version and uploads it as a workflow arti
 - A private repository needs GitHub Pro, GitHub Team, or an Enterprise plan.
 - A published Pages site is public on the internet, even when its source repository is private.
 
-The current game repository is private, so the first automatic deployment was rejected by GitHub before the publish step. The build itself succeeded. To enable Pages deployment, first confirm that the account plan supports Pages for this private repository (or intentionally make the repository public). Then create the repository Actions variable `ENABLE_GITHUB_PAGES=true` under **Settings → Secrets and variables → Actions → Variables**. The workflow will then attempt deployment. If Pages still needs initial setup, select **Settings → Pages → Build and deployment → Source → GitHub Actions**.
-
-Do not make the source repository public just to remove this deployment error unless you explicitly intend to publish the source code.
+The repository is public and GitHub Pages deploys automatically from successful pushes to the main branch. The published game is available at https://xyzpopo.github.io/PixelCityTycoon/.
 
 ### Browser compatibility
 
-Pygbag runs pygame-ce in modern browsers, including mobile browsers. The first visit can take longer because the browser downloads the WebAssembly runtime. Mobile touch controls and layout still need real-device testing and refinement; the current game interface was originally designed for a 16:9 desktop canvas.
+Pygbag runs pygame-ce in modern browsers, including mobile browsers. The first visit can take longer because the browser downloads the WebAssembly runtime. The web build downloads and packages Noto Sans KR so Korean text does not depend on fonts installed on the device. Mobile touch controls and layout are being added in stages and still require real-device testing.
