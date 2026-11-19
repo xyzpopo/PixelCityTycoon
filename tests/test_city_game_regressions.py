@@ -98,5 +98,33 @@ class CityGameRegressionTests(unittest.TestCase):
                 self.assertEqual(self.game.money, 54321)
 
 
+    def test_settings_round_trip_and_sandbox_restoration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            save_dir = Path(temporary)
+            legacy_file = save_dir / "city_save.json"
+            with patch.object(main, "IS_WEB", False), \
+                 patch.object(main, "SAVE_DIR", save_dir), \
+                 patch.object(main, "SAVE_FILE", legacy_file):
+                self.game.sandbox_mode = True
+                self.game.sound_enabled = False
+                self.game.window_scale = 3
+                self.game.save_game(3)
+                self.game.sandbox_mode = False
+                self.game.sound_enabled = True
+                self.game.window_scale = 1
+                self.game.load_game(3)
+                self.assertTrue(self.game.sandbox_mode)
+                self.assertFalse(self.game.sound_enabled)
+                self.assertEqual(self.game.window_scale, 3)
+                self.assertEqual(self.game.window.get_size(), (main.LOGICAL_W * 3, main.LOGICAL_H * 3))
+
+        self.game.sandbox_mode = True
+        self.game.money = 0
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        tree_pos = (sx + 1, sy + 1)
+        rock_pos = (sx - 1, sy - 1)
+        self.assertTrue(self.game.can_reserve_work_order("restore_tree", *tree_pos)[0])
+        self.assertTrue(self.game.can_reserve_work_order("restore_rock", *rock_pos)[0])
+
 if __name__ == "__main__":
     unittest.main()
