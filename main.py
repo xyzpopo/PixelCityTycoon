@@ -3609,6 +3609,48 @@ class CityGame:
             (round(head_x - 1*z), helmet_y, max(2, round(2*z)), max(1, round(2*z)))
         )
 
+    def draw_resident_walkers(self) -> None:
+        """Show tiny moving residents on built roads as a lightweight traffic simulation."""
+        if self.underground_view or self.population <= 0 or not self.roads:
+            return
+        road_tiles = sorted(
+            self.roads,
+            key=lambda pos: (
+                self.rotate_grid_position(*pos)[0] +
+                self.rotate_grid_position(*pos)[1],
+                self.rotate_grid_position(*pos)[0],
+            )
+        )
+        count = min(12, max(1, self.population // 2), len(road_tiles))
+        travel_phase = self.game_minutes * 0.035 + self.day * 0.71
+        for index in range(count):
+            phase = (travel_phase + index * 0.61803398875) % 1.0
+            tile_index = int(phase * len(road_tiles))
+            local_phase = (phase * len(road_tiles)) % 1.0
+            x, y = road_tiles[tile_index]
+            cx, cy = self.tile_to_screen(x, y)
+            axis = self.road_directions.get((x, y), self.infer_road_axis(x, y))
+            offset = (local_phase - 0.5) * TILE_W * self.zoom * 0.42
+            if axis == "x":
+                cx += offset
+            else:
+                cy += offset * 0.5
+            px, py = round(cx), round(cy - 3 * self.zoom)
+            scale = max(1, round(self.zoom))
+            shirt = (235, 190, 105) if index % 2 == 0 else (116, 177, 199)
+            pygame.draw.rect(
+                self.canvas, (42, 48, 47),
+                (px - scale, py - 2 * scale, 3 * scale, 5 * scale)
+            )
+            pygame.draw.rect(
+                self.canvas, shirt,
+                (px - scale, py, 3 * scale, 3 * scale)
+            )
+            pygame.draw.rect(
+                self.canvas, (230, 190, 145),
+                (px, py - 3 * scale, 2 * scale, 2 * scale)
+            )
+
     def draw_time_of_day(self) -> None:
         """Tint the playfield at night and illuminate placed street lamps."""
         if self.underground_view:
@@ -3725,7 +3767,7 @@ class CityGame:
                     cx, cy = self.tile_to_screen(x, y)
                     if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
                         self.draw_road(x, y)
-
+            self.draw_resident_walkers()
             self.draw_worker_path_preview()
 
             depth_items: List[Tuple[float, float, int, int, int, str]] = []
