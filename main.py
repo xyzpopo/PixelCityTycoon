@@ -346,6 +346,7 @@ class CityGame:
         self.save_dialog_selected = 1
         self.save_dialog_confirm = False
         self.autosave_elapsed = 0.0
+        self.last_load_success = False
         self.settings_open = False
         self.help_open = False
         self.sandbox_mode = False
@@ -2146,7 +2147,10 @@ class CityGame:
             if not autosave:
                 self.notify(f"저장 실패 · 기존 저장 데이터는 유지했어요: {exc}", 4)
 
-    def load_game(self, slot: int = 1, autosave: bool = False) -> None:
+    def load_game(
+        self, slot: int = 1, autosave: bool = False,
+        save_text_override: Optional[str] = None
+    ) -> None:
         state_fields = (
             "seed", "rng", "terrain", "trees", "rocks", "roads",
             "road_directions", "road_direction", "selected_road_tile",
@@ -2169,8 +2173,13 @@ class CityGame:
         previous_state = {
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
         }
+        self.last_load_success = False
         try:
-            data = json.loads(self.read_save_text(slot, autosave))
+            raw_save = (
+                save_text_override if save_text_override is not None
+                else self.read_save_text(slot, autosave)
+            )
+            data = json.loads(raw_save)
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
             saved_version = data.get("version", 1)
@@ -2389,6 +2398,7 @@ class CityGame:
             self.center_camera()
             if self.camera_follow_worker:
                 self.center_camera_on_worker()
+            self.last_load_success = True
             self.notify(
                 f"{'자동 저장' if autosave else f'슬롯 {slot}'} 도시를 불러왔어요.",
                 3,
@@ -4134,6 +4144,77 @@ class CityGame:
         self.draw_save_dialog()
         self.draw_settings_modal()
         self.draw_help_modal()
+
+    def export_save_json(self, slot: int = 1) -> None:
+        """Export an existing manual save slot as a portable JSON file."""
+        try:
+            serialized = self.read_save_text(slot)
+        except (OSError, FileNotFoundError) as exc:
+            self.notify(f"슬롯 {slot} 저장 데이터를 찾을 수 없어요. 먼저 저장해 주세요. ({exc})", 3.5)
+            return
+        filename = f"pixel-city-tycoon-slot-{slot}.json"
+        try:
+            if IS_WEB:
+                from platform import window
+                blob = window.Blob.new([serialized], {"type": "application/json;charset=utf-8"})
+                url = window.URL.createObjectURL(blob)
+                anchor = window.document.createElement("a")
+                anchor.href = url
+                anchor.download = filename
+                anchor.click()
+                window.URL.revokeObjectURL(url)
+            else:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                path = filedialog.asksaveasfilename(
+                    title="도시 저장 파일 내보내기",
+                    defaultextension=".json",
+                    initialfile=filename,
+                    filetypes=[("JSON 저장 파일", "*.json"), ("모든 파일", "*.*")]
+                )
+                root.destroy()
+                if not path:
+                    return
+                Path(path).write_text(serialized, encoding="utf-8")
+            self.notify(f"슬롯 {slot} JSON 내보내기를 완료했어요.", 3)
+        except Exception as exc:
+            self.notify(f"JSON 내보내기 실패: {exc}", 4)
+
+    def import_save_json(self, slot: int = 1) -> None:
+        """Import a JSON save, validate it, then store it in the selected slot."""
+        try:
+            if IS_WEB:
+                from platform import window
+                serialized = window.prompt(
+                    "가져올 JSON 저장 파일의 내용을 붙여넣으세요.\n"
+                    "PC에서는 JSON 파일을 메모장으로 열어 전체 내용을 복사하면 됩니다."
+                )
+                if serialized is None or not str(serialized).strip():
+                    return
+                serialized = str(serialized)
+            else:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                path = filedialog.askopenfilename(
+                    title="도시 JSON 저장 파일 가져오기",
+                    filetypes=[("JSON 저장 파일", "*.json"), ("모든 파일", "*.*")]
+                )
+                root.destroy()
+                if not path:
+                    return
+                serialized = Path(path).read_text(encoding="utf-8")
+            self.load_game(slot=slot, save_text_override=serialized)
+            if self.last_load_success:
+                self.save_game(slot)
+                self.notify(f"JSON 데이터를 슬롯 {slot}에 가져왔어요.", 3.5)
+        except Exception as exc:
+            self.notify(f"JSON 가져오기 실패: {exc}", 4)
 
     def handle_settings_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
