@@ -2038,16 +2038,16 @@ class CityGame:
         if mode is None:
             return
         if self.save_dialog_confirm:
-            if 190 <= x <= 315 and 280 <= y <= 310:
+            if 190 <= x <= 315 and 286 <= y <= 316:
                 self.save_game(self.save_dialog_selected)
                 self.save_dialog_mode = None
                 self.save_dialog_confirm = False
                 return
-            if 325 <= x <= 450 and 280 <= y <= 310:
+            if 325 <= x <= 450 and 286 <= y <= 316:
                 self.save_dialog_confirm = False
                 return
             return
-        for slot, top in enumerate((112, 150, 188), start=1):
+        for slot, top in enumerate((72, 108, 144), start=1):
             if 160 <= x <= 480 and top <= y <= top + 30:
                 exists, _description = self.save_slot_info(slot)
                 self.save_dialog_selected = slot
@@ -2063,11 +2063,17 @@ class CityGame:
                     self.save_game(slot)
                     self.save_dialog_mode = None
                 return
-        if mode == "load" and 160 <= x <= 480 and 226 <= y <= 256:
+        if mode == "load" and 160 <= x <= 480 and 180 <= y <= 210:
             self.load_game(autosave=True)
             self.save_dialog_mode = None
             return
-        if 325 <= x <= 450 and 280 <= y <= 310:
+        if 160 <= x <= 315 and 220 <= y <= 250:
+            self.export_save_json(self.save_dialog_selected)
+            return
+        if 325 <= x <= 480 and 220 <= y <= 250:
+            self.import_save_json(self.save_dialog_selected)
+            return
+        if 325 <= x <= 450 and 286 <= y <= 316:
             self.save_dialog_mode = None
             self.save_dialog_confirm = False
 
@@ -4274,7 +4280,7 @@ class CityGame:
             "가운데 버튼 드래그 / WASD: 카메라 이동 · 휠: 확대/축소",
             "Q/E: 지도 회전 · C: 작업자 추적 · U: 지층 조사",
             "F3 도로 선택 후 R: 방향 회전 · F4 건물 선택 후 G: 업그레이드",
-            "F5 저장 · F9 불러오기 · F10 설정 · F11 도움말 · ESC 닫기",
+            "F5 저장 · F9 불러오기 · F10 설정 · F11 도움말 · JSON 저장/불러오기는 슬롯 창",
             "주택은 도로 옆에 건설해야 하며, 건설 예약은 자금과 재료를 확보합니다.",
             "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
             "발전소·급수탑은 일정 범위의 주택에 전력·물을 공급하며 주민 증가에 필요합니다.",
@@ -4291,12 +4297,12 @@ class CityGame:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 190))
         self.canvas.blit(shade, (0, 0))
-        panel = pygame.Rect(142, 76, 356, 250)
+        panel = pygame.Rect(142, 38, 356, 292)
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
         title = "저장 슬롯 선택" if self.save_dialog_mode == "save" else "불러올 슬롯 선택"
-        self.text(self.canvas, title, panel.centerx, 94, 13, C["gold"], center=True)
-        for slot, top in enumerate((112, 150, 188), start=1):
+        self.text(self.canvas, title, panel.centerx, 54, 13, C["gold"], center=True)
+        for slot, top in enumerate((72, 108, 144), start=1):
             rect = pygame.Rect(160, top, 320, 30)
             active = slot == self.save_dialog_selected
             exists, description = self.save_slot_info(slot)
@@ -4308,7 +4314,7 @@ class CityGame:
             self.text(self.canvas, description, rect.x + 82, rect.y + 6, 8, color)
         if self.save_dialog_mode == "load":
             exists, description = self.save_slot_info(1, autosave=True)
-            auto_rect = pygame.Rect(160, 226, 320, 30)
+            auto_rect = pygame.Rect(160, 180, 320, 30)
             pygame.draw.rect(self.canvas, C["panel2"], auto_rect)
             pygame.draw.rect(self.canvas, (88, 104, 103), auto_rect, 1)
             self.text(self.canvas, "자동 저장", auto_rect.x + 10, auto_rect.y + 5, 10, C["gold"])
@@ -4319,12 +4325,14 @@ class CityGame:
         if self.save_dialog_confirm:
             self.text(
                 self.canvas, f"슬롯 {self.save_dialog_selected}의 저장 데이터를 덮어쓸까요?",
-                panel.centerx, 266, 9, C["white"], center=True
+                panel.centerx, 264, 9, C["white"], center=True
             )
-            self.button(pygame.Rect(190, 280, 125, 30), "덮어쓰기", True, small=True)
-            self.button(pygame.Rect(325, 280, 125, 30), "취소", small=True)
+            self.button(pygame.Rect(190, 286, 125, 30), "덮어쓰기", True, small=True)
+            self.button(pygame.Rect(325, 286, 125, 30), "취소", small=True)
         else:
-            self.button(pygame.Rect(325, 280, 125, 30), "닫기", small=True)
+            self.button(pygame.Rect(325, 286, 125, 30), "닫기", small=True)
+        self.button(pygame.Rect(160, 220, 155, 30), "JSON 내보내기", small=True)
+        self.button(pygame.Rect(325, 220, 155, 30), "JSON 가져오기", small=True)
 
     def draw_seed_modal(self) -> None:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
