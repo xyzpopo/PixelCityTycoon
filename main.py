@@ -1999,6 +1999,41 @@ class CityGame:
         self.save_dialog_selected = 1
         self.save_dialog_confirm = False
 
+    def handle_save_dialog_click(self, pos: Tuple[int, int]) -> None:
+        x, y = pos
+        mode = self.save_dialog_mode
+        if mode is None:
+            return
+        if self.save_dialog_confirm:
+            if 190 <= x <= 315 and 238 <= y <= 268:
+                self.save_game(self.save_dialog_selected)
+                self.save_dialog_mode = None
+                self.save_dialog_confirm = False
+                return
+            if 325 <= x <= 450 and 238 <= y <= 268:
+                self.save_dialog_confirm = False
+                return
+            return
+        for slot, top in enumerate((112, 150, 188), start=1):
+            if 160 <= x <= 480 and top <= y <= top + 30:
+                exists, _description = self.save_slot_info(slot)
+                self.save_dialog_selected = slot
+                if mode == "load":
+                    if exists:
+                        self.load_game(slot)
+                        self.save_dialog_mode = None
+                    else:
+                        self.notify(f"슬롯 {slot}은 비어 있어요.", 2)
+                elif exists:
+                    self.save_dialog_confirm = True
+                else:
+                    self.save_game(slot)
+                    self.save_dialog_mode = None
+                return
+        if 325 <= x <= 450 and 238 <= y <= 268:
+            self.save_dialog_mode = None
+            self.save_dialog_confirm = False
+
     def save_game(self, slot: int = 1, autosave: bool = False) -> None:
         if not autosave and (type(slot) is not int or not 1 <= slot <= 3):
             self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
@@ -3938,6 +3973,38 @@ class CityGame:
         if self.modal_seed:
             self.draw_seed_modal()
         self.draw_build_palette()
+        self.draw_save_dialog()
+
+    def draw_save_dialog(self) -> None:
+        if self.save_dialog_mode is None:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 190))
+        self.canvas.blit(shade, (0, 0))
+        panel = pygame.Rect(142, 76, 356, 208)
+        pygame.draw.rect(self.canvas, C["panel"], panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        title = "저장 슬롯 선택" if self.save_dialog_mode == "save" else "불러올 슬롯 선택"
+        self.text(self.canvas, title, panel.centerx, 94, 13, C["gold"], center=True)
+        for slot, top in enumerate((112, 150, 188), start=1):
+            rect = pygame.Rect(160, top, 320, 30)
+            active = slot == self.save_dialog_selected
+            exists, description = self.save_slot_info(slot)
+            fill = C["panel3"] if active else C["panel2"]
+            pygame.draw.rect(self.canvas, fill, rect)
+            pygame.draw.rect(self.canvas, C["gold"] if active else (88, 104, 103), rect, 1)
+            self.text(self.canvas, f"슬롯 {slot}", rect.x + 10, rect.y + 5, 10, C["white"])
+            color = C["muted"] if exists else (130, 145, 137)
+            self.text(self.canvas, description, rect.x + 82, rect.y + 6, 8, color)
+        if self.save_dialog_confirm:
+            self.text(
+                self.canvas, f"슬롯 {self.save_dialog_selected}의 저장 데이터를 덮어쓸까요?",
+                panel.centerx, 226, 9, C["white"], center=True
+            )
+            self.button(pygame.Rect(190, 238, 125, 30), "덮어쓰기", True, small=True)
+            self.button(pygame.Rect(325, 238, 125, 30), "취소", small=True)
+        else:
+            self.button(pygame.Rect(325, 238, 125, 30), "닫기", small=True)
 
     def draw_seed_modal(self) -> None:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
@@ -4062,6 +4129,9 @@ class CityGame:
 
     def handle_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
+        if self.save_dialog_mode is not None:
+            self.handle_save_dialog_click(pos)
+            return
         if self.modal_seed:
             return
         virtual_key = self.virtual_key_at(pos)
@@ -4073,9 +4143,9 @@ class CityGame:
                 self.modal_seed = True
                 self.seed_text = ""
             elif 573 <= x <= 602 and 4 <= y <= 27:
-                self.save_game()
+                self.open_save_dialog("save")
             elif 605 <= x <= 638 and 4 <= y <= 27:
-                self.load_game()
+                self.open_save_dialog("load")
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
@@ -4264,7 +4334,11 @@ class CityGame:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.modal_seed:
+                if self.save_dialog_mode is not None:
+                    if event.key == pygame.K_ESCAPE:
+                        self.save_dialog_mode = None
+                        self.save_dialog_confirm = False
+                elif self.modal_seed:
                     if event.key == pygame.K_ESCAPE:
                         self.modal_seed = False
                     elif event.key == pygame.K_RETURN:
@@ -4555,6 +4629,10 @@ class CityGame:
                 self.camera_y -= (camera_dy / length) * CAMERA_SPEED * dt
             elif self.camera_follow_worker:
                 self.center_camera_on_worker()
+        self.autosave_elapsed += max(0.0, dt)
+        if self.autosave_elapsed >= 180.0:
+            self.save_game(autosave=True)
+
         if self.worker_action_timer > 0:
             self.worker_action_elapsed = min(
                 WORK_ACTION_DURATION,
