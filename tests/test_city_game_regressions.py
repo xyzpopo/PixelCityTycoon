@@ -180,5 +180,16 @@ class CityGameRegressionTests(unittest.TestCase):
         self.game.road_directions = {(sx, sy): "x", (sx + 1, sy): "x", (sx + 2, sy): "x"}
         self.game.draw_resident_walkers()
 
+    def test_two_finger_gesture_pans_and_pinch_zooms(self):
+        self.game.touch_fingers = {1: (100, 100), 2: (200, 100)}
+        self.game.touch_gesture_mode = None
+        original_zoom = self.game.zoom_index
+        original_camera = (self.game.camera_x, self.game.camera_y)
+        self.game.update_multi_touch_gesture()
+        self.game.touch_fingers[2] = (260, 120)
+        self.game.update_multi_touch_gesture()
+        self.assertEqual(self.game.zoom_index, min(original_zoom + 1, len(main.ZOOM_LEVELS) - 1))
+        self.assertNotEqual((self.game.camera_x, self.game.camera_y), original_camera)
+
 if __name__ == "__main__":
     unittest.main()
