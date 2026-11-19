@@ -126,5 +126,59 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertTrue(self.game.can_reserve_work_order("restore_tree", *tree_pos)[0])
         self.assertTrue(self.game.can_reserve_work_order("restore_rock", *rock_pos)[0])
 
+    def test_city_utility_coverage_and_population_growth(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        house = (sx, sy)
+        self.game.houses = {house}
+        self.game.house_levels = {house: 2}
+        self.game.population = 4
+        self.game.city_objects = {
+            (sx + 1, sy): {"type": "power", "level": 1},
+            (sx, sy + 1): {"type": "water", "level": 1},
+            (sx + 2, sy): {"type": "commercial", "level": 1},
+        }
+        status = self.game.calculate_city_service_status()
+        self.assertEqual(status["power_coverage"], 1.0)
+        self.assertEqual(status["water_coverage"], 1.0)
+        self.assertGreaterEqual(status["power_output"], status["power_demand"])
+        self.assertGreaterEqual(status["water_output"], status["water_demand"])
+        self.assertEqual(self.game.update_city_population(), 2)
+        self.assertEqual(self.game.population, 6)
+
+    def test_unserved_city_does_not_grow(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        house = (sx, sy)
+        self.game.houses = {house}
+        self.game.house_levels = {house: 2}
+        self.game.population = 4
+        self.game.city_objects = {(sx + 2, sy): {"type": "commercial", "level": 1}}
+        self.assertEqual(self.game.update_city_population(), 0)
+        self.assertEqual(self.game.population, 4)
+
+    def test_mouse_coordinates_follow_display_scale(self):
+        original_size = self.game.window.get_size()
+        try:
+            self.game.window = main.pygame.display.set_mode((main.LOGICAL_W * 3, main.LOGICAL_H * 3))
+            self.assertEqual(self.game.logical_mouse((300, 150)), (100, 50))
+        finally:
+            self.game.window = main.pygame.display.set_mode(original_size)
+
+    def test_night_lighting_renders_with_street_lamps(self):
+        self.game.canvas.fill((200, 200, 200))
+        self.game.game_minutes = 22 * 60
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        self.game.city_objects = {(sx, sy): {"type": "lamp", "level": 1}}
+        before = self.game.canvas.get_at((320, 180))
+        self.game.draw_time_of_day()
+        after = self.game.canvas.get_at((320, 180))
+        self.assertNotEqual(before, after)
+
+    def test_resident_walkers_render_on_roads(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        self.game.population = 12
+        self.game.roads = {(sx, sy), (sx + 1, sy), (sx + 2, sy)}
+        self.game.road_directions = {(sx, sy): "x", (sx + 1, sy): "x", (sx + 2, sy): "x"}
+        self.game.draw_resident_walkers()
+
 if __name__ == "__main__":
     unittest.main()

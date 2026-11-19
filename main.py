@@ -141,16 +141,19 @@ CITY_OBJECT_DEFS = {
         "label": "상업 건물", "w": 2, "h": 2,
         "money": 8500, "wood": 3, "stone": 2,
         "road": True, "jobs": 8, "income": 120, "maintenance": 20,
+        "power_use": 2, "water_use": 2,
     },
     "industrial": {
         "label": "공업 건물", "w": 3, "h": 2,
         "money": 12000, "wood": 5, "stone": 4,
         "road": True, "jobs": 12, "income": 180, "maintenance": 40,
+        "power_use": 4, "water_use": 3, "pollution": 12,
     },
     "public": {
         "label": "공공시설", "w": 2, "h": 2,
         "money": 9500, "wood": 3, "stone": 4,
         "road": True, "jobs": 4, "income": 0, "maintenance": 45,
+        "power_use": 1, "water_use": 1,
     },
     "park": {
         "label": "공원", "w": 2, "h": 2,
@@ -3606,6 +3609,86 @@ class CityGame:
             (round(head_x - 1*z), helmet_y, max(2, round(2*z)), max(1, round(2*z)))
         )
 
+    def draw_resident_walkers(self) -> None:
+        """Show tiny moving residents on built roads as a lightweight traffic simulation."""
+        if self.underground_view or self.population <= 0 or not self.roads:
+            return
+        road_tiles = sorted(
+            self.roads,
+            key=lambda pos: (
+                self.rotate_grid_position(*pos)[0] +
+                self.rotate_grid_position(*pos)[1],
+                self.rotate_grid_position(*pos)[0],
+            )
+        )
+        count = min(12, max(1, self.population // 2), len(road_tiles))
+        travel_phase = self.game_minutes * 0.035 + self.day * 0.71
+        for index in range(count):
+            phase = (travel_phase + index * 0.61803398875) % 1.0
+            tile_index = int(phase * len(road_tiles))
+            local_phase = (phase * len(road_tiles)) % 1.0
+            x, y = road_tiles[tile_index]
+            cx, cy = self.tile_to_screen(x, y)
+            axis = self.road_directions.get((x, y), self.infer_road_axis(x, y))
+            offset = (local_phase - 0.5) * TILE_W * self.zoom * 0.42
+            if axis == "x":
+                cx += offset
+            else:
+                cy += offset * 0.5
+            px, py = round(cx), round(cy - 3 * self.zoom)
+            scale = max(1, round(self.zoom))
+            shirt = (235, 190, 105) if index % 2 == 0 else (116, 177, 199)
+            pygame.draw.rect(
+                self.canvas, (42, 48, 47),
+                (px - scale, py - 2 * scale, 3 * scale, 5 * scale)
+            )
+            pygame.draw.rect(
+                self.canvas, shirt,
+                (px - scale, py, 3 * scale, 3 * scale)
+            )
+            pygame.draw.rect(
+                self.canvas, (230, 190, 145),
+                (px, py - 3 * scale, 2 * scale, 2 * scale)
+            )
+
+    def draw_time_of_day(self) -> None:
+        """Tint the playfield at night and illuminate placed street lamps."""
+        if self.underground_view:
+            return
+        hour = self.game_minutes / 60.0
+        if 5.0 <= hour < 7.0:
+            night = (7.0 - hour) / 2.0
+        elif 17.0 <= hour < 20.0:
+            night = (hour - 17.0) / 3.0
+        elif hour >= 20.0 or hour < 5.0:
+            night = 1.0
+        else:
+            night = 0.0
+        if night <= 0.01:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((13, 22, 49, round(105 * night)))
+        self.canvas.blit(shade, (0, 0))
+        if night < 0.12:
+            return
+        glow_layer = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        for (x, y), data in self.city_objects.items():
+            if data.get("type") != "lamp" or not self.is_unlocked(x, y):
+                continue
+            cx, cy = self.tile_to_screen(x, y)
+            if not VIEW_RECT.collidepoint(round(cx), round(cy)):
+                continue
+            radius = max(5, round(25 * self.zoom))
+            pygame.draw.circle(
+                glow_layer, (255, 205, 103, round(36 * night)),
+                (round(cx), round(cy - 15 * self.zoom)), radius
+            )
+            pygame.draw.circle(
+                glow_layer, (255, 229, 159, round(24 * night)),
+                (round(cx), round(cy - 15 * self.zoom)), max(3, radius // 2)
+            )
+        self.canvas.blit(glow_layer, (0, 0))
+
     def draw_world(self) -> None:
         self.canvas.fill(C["sky"])
         self.canvas.set_clip(VIEW_RECT)
@@ -3684,7 +3767,7 @@ class CityGame:
                     cx, cy = self.tile_to_screen(x, y)
                     if -80 <= cx <= LOGICAL_W + 80 and TOP_H - 40 <= cy <= BOTTOM_Y + 40:
                         self.draw_road(x, y)
-
+            self.draw_resident_walkers()
             self.draw_worker_path_preview()
 
             depth_items: List[Tuple[float, float, int, int, int, str]] = []
@@ -3773,8 +3856,7 @@ class CityGame:
                 f"지층 조사 화면 · {self.underground_layer}/3층 · 채굴은 지상의 채굴장이 자동 진행 · U: 지상 복귀 · [ ]: 층 변경",
                 12, TOP_H + 5, 9, (224, 218, 187)
             )
-            mouse = pygame.mouse.get_pos()
-            mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+            mx, my = self.logical_mouse(pygame.mouse.get_pos())
             if VIEW_RECT.collidepoint(mx, my):
                 tile = self.screen_to_tile(mx, my)
                 if tile:
@@ -3789,8 +3871,7 @@ class CityGame:
 
         if not self.underground_view:
             # Tile cursor / placement preview.
-            mouse = pygame.mouse.get_pos()
-            mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+            mx, my = self.logical_mouse(pygame.mouse.get_pos())
             if VIEW_RECT.collidepoint(mx, my):
                 tile = self.screen_to_tile(mx, my)
                 if tile:
@@ -3859,6 +3940,8 @@ class CityGame:
                         )
 
 
+        # Night lighting is applied after world objects but before the tutorial card.
+        self.draw_time_of_day()
         # Tutorial card.
         self.draw_tutorial_card()
         self.canvas.set_clip(None)
@@ -3900,8 +3983,7 @@ class CityGame:
         if self.tool != "move" or self.dragging or self.modal_seed:
             return
 
-        mouse = pygame.mouse.get_pos()
-        mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+        mx, my = self.logical_mouse(pygame.mouse.get_pos())
         if not VIEW_RECT.collidepoint(mx, my):
             return
 
@@ -4028,9 +4110,13 @@ class CityGame:
         elif self.tool == "restore":
             hint = f"복원: {RESTORE_MODE_LABELS[self.restore_mode]} · [ ] 또는 하단 버튼으로 변경"
         self.text(self.canvas, hint, 10, 327, 8, C["text"])
+        city_status = self.calculate_city_service_status()
         self.text(
             self.canvas,
-            "Q/E 지도 회전   C 추적   U 지층 조사   G 업그레이드   R 도로 회전",
+            f"전력 {int(city_status['power_output'])}/{int(city_status['power_demand'])} "
+            f"물 {int(city_status['water_output'])}/{int(city_status['water_demand'])} "
+            f"행복 {int(city_status['happiness'])} 환경 {int(city_status['environment'])} "
+            f"교통 {int(city_status['traffic'])}",
             10, 344, 8, C["muted"]
         )
 
@@ -4110,6 +4196,8 @@ class CityGame:
             "F5 저장 · F9 불러오기 · F10 설정 · F11 도움말 · ESC 닫기",
             "주택은 도로 옆에 건설해야 하며, 건설 예약은 자금과 재료를 확보합니다.",
             "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
+            "발전소·급수탑은 일정 범위의 주택에 전력·물을 공급하며 주민 증가에 필요합니다.",
+            "행복도는 전력·물·일자리·공원·환경·교통 지표에 따라 달라집니다.",
             "저장/불러오기에서 수동 슬롯 3개와 자동 저장본을 관리할 수 있습니다.",
         ]
         for index, line in enumerate(help_lines):
@@ -4770,6 +4858,118 @@ class CityGame:
         if produced:
             self.notify(f"벌목장 생산 완료 · 목재 +{produced}", 3)
 
+    def calculate_city_service_status(self) -> Dict[str, float]:
+        """Calculate housing, job, utility coverage, environment and traffic indicators."""
+        houses = list(self.houses)
+        population = max(0, self.population)
+        housing_capacity = sum(
+            4 + 2 * (self.house_levels.get(pos, 1) - 1) for pos in houses
+        )
+        power_plants = [
+            (pos, data) for pos, data in self.city_objects.items()
+            if data.get("type") == "power"
+        ]
+        water_plants = [
+            (pos, data) for pos, data in self.city_objects.items()
+            if data.get("type") == "water"
+        ]
+        power_output = sum(
+            int(CITY_OBJECT_DEFS["power"]["power_output"]) *
+            max(1, int(data.get("level", 1))) for _pos, data in power_plants
+        )
+        water_output = sum(
+            int(CITY_OBJECT_DEFS["water"]["water_output"]) *
+            max(1, int(data.get("level", 1))) for _pos, data in water_plants
+        )
+        power_demand = math.ceil(population / 4)
+        water_demand = math.ceil(population / 4)
+        pollution = 0
+        park_count = 0
+        commercial_count = 0
+        for data in self.city_objects.values():
+            kind = data.get("type")
+            spec = CITY_OBJECT_DEFS.get(kind)
+            if spec is None:
+                continue
+            level = max(1, int(data.get("level", 1)))
+            power_demand += int(spec.get("power_use", 0)) * level
+            water_demand += int(spec.get("water_use", 0)) * level
+            pollution += int(spec.get("pollution", 0)) * level
+            if kind == "park":
+                park_count += 1
+            elif kind == "commercial":
+                commercial_count += 1
+
+        def coverage(plants: List[Tuple[Tuple[int, int], dict]]) -> float:
+            if not houses:
+                return 1.0
+            if not plants:
+                return 0.0
+            covered = 0
+            for hx, hy in houses:
+                if any(
+                    abs(hx - px) + abs(hy - py) <= int(
+                        CITY_OBJECT_DEFS[data["type"]].get("service_range", 0)
+                    )
+                    for (px, py), data in plants
+                ):
+                    covered += 1
+            return covered / len(houses)
+
+        power_coverage = coverage(power_plants)
+        water_coverage = coverage(water_plants)
+        power_ratio = 1.0 if power_demand == 0 else min(1.0, power_output / power_demand)
+        water_ratio = 1.0 if water_demand == 0 else min(1.0, water_output / water_demand)
+        jobs = self.available_city_jobs()
+        job_ratio = 1.0 if population == 0 else min(1.0, jobs / population)
+        tree_bonus = min(20, len(self.trees) // 3)
+        environment = int(clamp(100 - pollution + park_count * 5 + tree_bonus, 0, 100))
+        traffic = int(clamp(population * 4 / max(1, len(self.roads)), 0, 100))
+        happiness = int(clamp(
+            35 + power_ratio * power_coverage * 20
+            + water_ratio * water_coverage * 20
+            + job_ratio * 10 + environment * 0.10
+            + min(5, park_count * 2) - traffic * 0.15,
+            0, 100
+        ))
+        return {
+            "housing_capacity": float(housing_capacity),
+            "housing_demand": float(max(0, population + 1 - housing_capacity)),
+            "power_output": float(power_output),
+            "power_demand": float(power_demand),
+            "power_coverage": power_coverage,
+            "water_output": float(water_output),
+            "water_demand": float(water_demand),
+            "water_coverage": water_coverage,
+            "jobs": float(jobs),
+            "job_demand": float(max(0, population - jobs)),
+            "commercial_demand": float(max(0, math.ceil(population / 8) - commercial_count)),
+            "environment": float(environment),
+            "traffic": float(traffic),
+            "happiness": float(happiness),
+        }
+
+    def update_city_population(self) -> int:
+        """Grow or gently shrink the city according to housing, services and jobs."""
+        status = self.calculate_city_service_status()
+        if (
+            status["housing_capacity"] > self.population
+            and status["power_demand"] <= status["power_output"]
+            and status["water_demand"] <= status["water_output"]
+            and status["power_coverage"] >= 1.0
+            and status["water_coverage"] >= 1.0
+            and status["jobs"] > 0
+            and status["jobs"] >= self.population
+            and status["happiness"] >= 60
+        ):
+            growth = min(2, int(status["housing_capacity"] - self.population))
+            self.population += growth
+            return growth
+        if status["happiness"] < 20 and self.population > 0:
+            self.population -= 1
+            return -1
+        return 0
+
     def calculate_daily_city_finances(self) -> Tuple[int, int, int]:
         """Return tax income, business income, and maintenance due for one game day."""
         tax_income = self.population * DAILY_INCOME_PER_RESIDENT
@@ -5063,9 +5263,14 @@ class CityGame:
             tax_income, business_income, maintenance = self.calculate_daily_city_finances()
             net_income = tax_income + business_income - maintenance
             self.money += net_income
+            population_change = self.update_city_population()
+            change_text = (
+                f" · 주민 {'+' if population_change > 0 else ''}{population_change}"
+                if population_change else ""
+            )
             self.notify(
                 f"DAY {self.day} · 세금 +₩{tax_income:,} · 사업 +₩{business_income:,} "
-                f"· 유지비 -₩{maintenance:,} · 순수익 {net_income:+,}원",
+                f"· 유지비 -₩{maintenance:,} · 순수익 {net_income:+,}원{change_text}",
                 3.4
             )
         # The first tutorial task is completed by giving the character a destination.
