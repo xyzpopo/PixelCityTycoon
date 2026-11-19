@@ -4352,14 +4352,15 @@ class CityGame:
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
         self.text(self.canvas, "조작법 / 게임 도움말", panel.centerx, 51, 14, C["gold"], center=True)
+        key_name = lambda action: pygame.key.name(self.key_bindings[action]).upper()
         help_lines = [
-            "F1 이동 · F2 제거 · F3 도로 · F4 건설 · F8 복원",
+            f"{key_name('move')} 이동 · {key_name('remove')} 제거 · {key_name('road')} 도로 · {key_name('build')} 건설 · {key_name('restore')} 복원",
             "1~5: 모드 선택 · [ / ]: 하위 작업/건물 종류 변경",
             "마우스 왼쪽 클릭: 선택 및 예약 · 드래그: 연속 작업 예약",
             "가운데 버튼 드래그 / WASD: 카메라 이동 · 휠: 확대/축소",
             "Q/E: 지도 회전 · C: 작업자 추적 · U: 지층 조사",
             "F3 도로 선택 후 R: 방향 회전 · F4 건물 선택 후 G: 업그레이드",
-            "F5 저장 · F9 불러오기 · F10 설정 · F11 도움말 · JSON 저장/불러오기는 슬롯 창",
+            f"{key_name('save')} 저장 · {key_name('load')} 불러오기 · {key_name('settings')} 설정 · {key_name('help')} 도움말 · JSON은 슬롯 창",
             "주택은 도로 옆에 건설해야 하며, 건설 예약은 자금과 재료를 확보합니다.",
             "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
             "발전소·급수탑은 일정 범위의 주택에 전력·물을 공급하며 주민 증가에 필요합니다.",
