@@ -4086,6 +4086,9 @@ class CityGame:
 
     def handle_touch_down(self, pos: Tuple[int, int]) -> None:
         """Route a touch press through the same tile and UI handlers as a mouse press."""
+        if self.save_dialog_mode is not None:
+            self.handle_click(pos)
+            return
         if self.modal_seed:
             return
         hit = self.build_palette_hit_test(pos)
@@ -4463,6 +4466,10 @@ class CityGame:
                 logical = self.logical_mouse(event.pos)
                 if self.modal_seed:
                     continue
+                if self.save_dialog_mode is not None:
+                    if event.button == 1:
+                        self.handle_click(logical)
+                    continue
                 if event.button == 1:
                     if self.build_palette_open:
                         hit = self.build_palette_hit_test(logical)
@@ -4615,6 +4622,8 @@ class CityGame:
         return jobs
 
     def update(self, dt: float) -> None:
+        if self.save_dialog_mode is not None:
+            return
         self.update_worker(dt)
         if not self.modal_seed:
             keys = pygame.key.get_pressed()
