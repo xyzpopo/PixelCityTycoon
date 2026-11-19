@@ -324,6 +324,10 @@ class CityGame:
         self.tool_drag_visited: Set[Tuple[int, int]] = set()
         self.modal_seed = False
         self.seed_text = ""
+        self.save_dialog_mode: Optional[str] = None
+        self.save_dialog_selected = 1
+        self.save_dialog_confirm = False
+        self.autosave_elapsed = 0.0
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
         self.tutorial_step = 0
@@ -1949,15 +1953,62 @@ class CityGame:
             f"도시 영역 확장 완료 · 반경 {radius}타일 · -₩{cost:,}", 3
         )
 
-    def save_game(self) -> None:
+    def save_slot_path(self, slot: int, autosave: bool = False) -> Optional[Path]:
+        if IS_WEB:
+            return None
+        return SAVE_DIR / ("city_autosave.json" if autosave else f"city_slot_{slot}.json")
+
+    def save_slot_key(self, slot: int = 1, autosave: bool = False) -> str:
+        return WEB_SAVE_KEY + ("-autosave" if autosave else f"-slot-{slot}")
+
+    def read_save_text(self, slot: int = 1, autosave: bool = False) -> str:
+        if IS_WEB:
+            try:
+                from platform import window
+                saved_text = window.localStorage.getItem(self.save_slot_key(slot, autosave))
+                if saved_text is None and slot == 1 and not autosave:
+                    saved_text = window.localStorage.getItem(WEB_SAVE_KEY)
+            except Exception as storage_error:
+                raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
+            if saved_text is None:
+                raise FileNotFoundError
+            return str(saved_text)
+
+        path = self.save_slot_path(slot, autosave)
+        if path is None:
+            raise FileNotFoundError
+        if not path.exists() and slot == 1 and not autosave and SAVE_FILE.exists():
+            path = SAVE_FILE
+        return path.read_text(encoding="utf-8")
+
+    def save_slot_info(self, slot: int) -> Tuple[bool, str]:
+        try:
+            data = json.loads(self.read_save_text(slot))
+            if not isinstance(data, dict) or type(data.get("seed")) is not int:
+                return True, "손상된 저장 데이터"
+            return True, f"DAY {data.get('day', '?')} · {data.get('saved_at', '이전 버전 저장')}"
+        except FileNotFoundError:
+            return False, "빈 슬롯"
+        except (OSError, ValueError, TypeError):
+            return True, "읽을 수 없는 저장 파일"
+
+    def open_save_dialog(self, mode: str) -> None:
+        if mode not in ("save", "load"):
+            return
+        self.save_dialog_mode = mode
+        self.save_dialog_selected = 1
+        self.save_dialog_confirm = False
+
+    def save_game(self, slot: int = 1, autosave: bool = False) -> None:
+        if not autosave and (type(slot) is not int or not 1 <= slot <= 3):
+            self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
+            return
         data = {
-            "version": 12,
+            "version": 13,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
-            "mine_sites": [
-                [x, y, layer, progress]
-                for (x, y), (layer, progress) in sorted(self.mines.items())
-            ],
+            "mine_sites": [[x, y, layer, progress] for (x, y), (layer, progress) in sorted(self.mines.items())],
             "map_rotation": self.map_rotation,
             "camera_follow_worker": self.camera_follow_worker,
             "underground_view": self.underground_view,
@@ -1966,24 +2017,12 @@ class CityGame:
             "rocks": [list(p) for p in sorted(self.rocks)],
             "roads": [list(p) for p in sorted(self.roads)],
             "road_direction": self.road_direction,
-            "road_directions": [
-                [x, y, axis] for (x, y), axis in sorted(self.road_directions.items())
-            ],
-            "terrain_heights": [
-                [self.terrain[x][y].height for y in range(MAP_H)]
-                for x in range(MAP_W)
-            ],
+            "road_directions": [[x, y, axis] for (x, y), axis in sorted(self.road_directions.items())],
+            "terrain_heights": [[self.terrain[x][y].height for y in range(MAP_H)] for x in range(MAP_W)],
             "houses": [list(p) for p in sorted(self.houses)],
-            "house_levels": [
-                [x, y, level] for (x, y), level in sorted(self.house_levels.items())
-            ],
-            "city_objects": [
-                [x, y, data.get("type"), data.get("level", 1)]
-                for (x, y), data in sorted(self.city_objects.items())
-            ],
-            "logging_progress": [
-                [x, y, progress] for (x, y), progress in sorted(self.logging_progress.items())
-            ],
+            "house_levels": [[x, y, level] for (x, y), level in sorted(self.house_levels.items())],
+            "city_objects": [[x, y, item.get("type"), item.get("level", 1)] for (x, y), item in sorted(self.city_objects.items())],
+            "logging_progress": [[x, y, progress] for (x, y), progress in sorted(self.logging_progress.items())],
             "expand_level": self.expand_level,
             "money": self.money,
             "population": self.population,
@@ -1993,8 +2032,7 @@ class CityGame:
             "game_minutes": self.game_minutes,
             "worker": [self.worker_x, self.worker_y],
             "worker_facing": list(self.worker_facing),
-            "work_orders": [{"tool": tool, "x": x, "y": y}
-                            for tool, x, y in self.work_queue],
+            "work_orders": [{"tool": tool, "x": x, "y": y} for tool, x, y in self.work_queue],
             "tutorial_step": self.tutorial_step,
             "tutorial_done": self.tutorial_done,
             "tutorial_removed": self.tutorial_removed,
@@ -2004,31 +2042,37 @@ class CityGame:
         }
         temporary_file = None
         try:
-            serialized = json.dumps(
-                data, ensure_ascii=False, indent=2, allow_nan=False
-            )
+            serialized = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
             if IS_WEB:
                 try:
                     from platform import window
-                    window.localStorage.setItem(WEB_SAVE_KEY, serialized)
+                    window.localStorage.setItem(self.save_slot_key(slot, autosave), serialized)
+                    if not autosave and slot == 1:
+                        window.localStorage.setItem(WEB_SAVE_KEY, serialized)
                 except Exception as storage_error:
                     raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
-                self.notify("브라우저에 도시를 저장했어요.", 3)
             else:
-                temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
+                path = self.save_slot_path(slot, autosave)
+                if path is None:
+                    raise OSError("저장 위치를 확인할 수 없어요.")
+                temporary_file = path.with_suffix(path.suffix + ".tmp")
                 SAVE_DIR.mkdir(parents=True, exist_ok=True)
                 temporary_file.write_text(serialized, encoding="utf-8")
-                os.replace(temporary_file, SAVE_FILE)
-                self.notify("도시를 안전하게 저장했어요.", 3)
+                os.replace(temporary_file, path)
+            if autosave:
+                self.autosave_elapsed = 0.0
+            else:
+                self.notify(f"슬롯 {slot}에 도시를 저장했어요.", 3)
         except (OSError, TypeError, ValueError) as exc:
             if temporary_file is not None:
                 try:
                     temporary_file.unlink(missing_ok=True)
                 except OSError:
                     pass
-            self.notify(f"저장 실패 · 기존 저장 파일은 유지했어요: {exc}", 4)
+            if not autosave:
+                self.notify(f"저장 실패 · 기존 저장 데이터는 유지했어요: {exc}", 4)
 
-    def load_game(self) -> None:
+    def load_game(self, slot: int = 1, autosave: bool = False) -> None:
         state_fields = (
             "seed", "rng", "terrain", "trees", "rocks", "roads",
             "road_directions", "road_direction", "selected_road_tile",
@@ -2051,19 +2095,12 @@ class CityGame:
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
         }
         try:
-            if IS_WEB:
-                try:
-                    from platform import window
-                    saved_text = window.localStorage.getItem(WEB_SAVE_KEY)
-                except Exception as storage_error:
-                    raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
-                if saved_text is None:
-                    raise FileNotFoundError
-                data = json.loads(str(saved_text))
-            else:
-                data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
+            data = json.loads(self.read_save_text(slot, autosave))
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
+            saved_version = data.get("version", 1)
+            if type(saved_version) is not int or saved_version > 13:
+                raise ValueError("이 저장 파일은 현재 게임 버전보다 새 버전에서 만들어졌어요.")
             saved_seed = data.get("seed")
             if type(saved_seed) is not int:
                 raise ValueError("저장 파일의 지도 시드가 올바르지 않아요.")
@@ -2270,13 +2307,24 @@ class CityGame:
             self.center_camera()
             if self.camera_follow_worker:
                 self.center_camera_on_worker()
-            self.notify("저장된 도시를 불러왔어요.", 3)
+            self.notify(
+                f"{'자동 저장' if autosave else f'슬롯 {slot}'} 도시를 불러왔어요.",
+                3,
+            )
         except FileNotFoundError:
-            self.notify("저장 파일이 없어요. 먼저 저장해 주세요.", 3)
+            self.notify(
+                "자동 저장 데이터가 없어요." if autosave
+                else f"슬롯 {slot}에는 저장 데이터가 없어요.",
+                3,
+            )
         except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
             for name, value in previous_state.items():
                 setattr(self, name, value)
-            self.notify(f"불러오기 실패 · 기존 도시는 유지했어요: {exc}", 4)
+            self.notify(
+                f"불러오기 실패 · 현재 도시는 유지했어요. 저장 파일이 손상됐거나 "
+                f"버전이 다를 수 있어요. 다른 슬롯/자동 저장을 확인하세요. ({exc})",
+                5,
+            )
 
     # ------------------------------------------------------------------
     # Rendering
