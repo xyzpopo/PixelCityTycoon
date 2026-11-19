@@ -180,5 +180,24 @@ class CityGameRegressionTests(unittest.TestCase):
         self.game.road_directions = {(sx, sy): "x", (sx + 1, sy): "x", (sx + 2, sy): "x"}
         self.game.draw_resident_walkers()
 
+    def test_json_save_text_import_is_transactional(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            save_dir = Path(temporary)
+            legacy_file = save_dir / "city_save.json"
+            with patch.object(main, "IS_WEB", False), \\
+                 patch.object(main, "SAVE_DIR", save_dir), \\
+                 patch.object(main, "SAVE_FILE", legacy_file):
+                self.game.money = 87654
+                self.game.save_game(1)
+                serialized = (save_dir / "city_slot_1.json").read_text(encoding="utf-8")
+                self.game.money = 12
+                self.game.load_game(save_text_override=serialized)
+                self.assertTrue(self.game.last_load_success)
+                self.assertEqual(self.game.money, 87654)
+                self.game.money = 321
+                self.game.load_game(save_text_override="{broken json")
+                self.assertFalse(self.game.last_load_success)
+                self.assertEqual(self.game.money, 321)
+
 if __name__ == "__main__":
     unittest.main()
