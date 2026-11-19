@@ -49,7 +49,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path assets/fonts | Out-Null
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf" -OutFile "assets/fonts/NotoSansKR[wght].ttf"
-          if ((Get-Item "assets/fonts/NotoSansKR[wght].ttf").Length -lt 10000) { throw "Korean font download is incomplete." }
+          if ((Get-Item -LiteralPath "assets/fonts/NotoSansKR[wght].ttf").Length -lt 10000) { throw "Korean font download is incomplete." }
 
       - name: Build Windows executable
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets/buildings;assets/buildings" --add-data "assets/fonts;assets/fonts" main.py
