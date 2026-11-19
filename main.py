@@ -4958,6 +4958,7 @@ class CityGame:
             and status["water_demand"] <= status["water_output"]
             and status["power_coverage"] >= 1.0
             and status["water_coverage"] >= 1.0
+            and status["jobs"] > 0
             and status["jobs"] >= self.population
             and status["happiness"] >= 60
         ):
