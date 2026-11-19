@@ -171,6 +171,19 @@ CITY_OBJECT_DEFS = {
         "label": "벌목장", "w": 2, "h": 2,
         "money": 7000, "wood": 3, "stone": 2,
         "road": True, "jobs": 6, "income": 0, "maintenance": 18,
+        "power_use": 1, "water_use": 1,
+    },
+    "power": {
+        "label": "발전소", "w": 2, "h": 2,
+        "money": 11000, "wood": 4, "stone": 4,
+        "road": True, "jobs": 3, "income": 0, "maintenance": 45,
+        "power_output": 48, "service_range": 9, "pollution": 16,
+    },
+    "water": {
+        "label": "급수탑", "w": 2, "h": 2,
+        "money": 7000, "wood": 2, "stone": 4,
+        "road": True, "jobs": 2, "income": 0, "maintenance": 22,
+        "water_output": 48, "service_range": 9, "pollution": 0,
     },
 }
 BUILDING_CYCLE = [
@@ -187,6 +200,8 @@ BUILD_MENU_ITEMS = [
     ("decor_tree", "조경수", "1×1"),
     ("mine", "채굴장", "1×1"),
     ("logging", "벌목장", "2×2"),
+    ("power", "발전소", "2×2"),
+    ("water", "급수탑", "2×2"),
 ]
 LUMBER_CAMP_DURATION_MINUTES = 6 * 60
 LUMBER_CAMP_WOOD_PER_CYCLE = 4
@@ -1044,7 +1059,8 @@ class CityGame:
 
     def build_palette_geometry(self) -> Tuple[pygame.Rect, List[pygame.Rect]]:
         """Return an anchored 3x3 building palette clamped inside the map view."""
-        width, height = 246, 132
+        rows = math.ceil(len(BUILD_MENU_ITEMS) / 3)
+        width, height = 246, 24 + rows * 30 + max(0, rows - 1) * 4 + 18
         anchor = self.build_palette_anchor or (self.worker_x, self.worker_y)
         ax, ay = self.tile_to_screen(*anchor)
         px = round(ax + 18)
@@ -2999,6 +3015,32 @@ class CityGame:
             pygame.draw.rect(self.canvas, (244, 202, 91), glow.inflate(line*2, line*2))
             pygame.draw.rect(self.canvas, (255, 239, 167), glow)
             pygame.draw.rect(self.canvas, (255, 255, 216), glow, line)
+            return
+
+        if kind == "power":
+            pygame.draw.polygon(self.canvas, (101, 111, 105), ground)
+            pygame.draw.polygon(self.canvas, (48, 61, 61), ground, line)
+            block = pygame.Rect(round(cx-half_w*0.43), round(ground_y-half_h*0.68), max(16, round(half_w*0.86)), max(14, round(half_h*0.70)))
+            pygame.draw.rect(self.canvas, (82, 91, 91), block)
+            pygame.draw.rect(self.canvas, (160, 165, 148), block, line)
+            chimney = pygame.Rect(round(cx+half_w*0.18), round(ground_y-half_h*1.35), max(6,round(8*z)), max(22,round(25*z)))
+            pygame.draw.rect(self.canvas, (78, 84, 82), chimney)
+            pygame.draw.rect(self.canvas, (194, 105, 74), (chimney.x, chimney.y+round(8*z), chimney.width, max(3,round(4*z))))
+            for offset in (-0.20, 0.12):
+                pygame.draw.rect(self.canvas, (232, 198, 102), (round(cx+half_w*offset), round(ground_y-half_h*0.45), max(4,round(5*z)), max(5,round(7*z))))
+            return
+
+        if kind == "water":
+            pygame.draw.polygon(self.canvas, (91, 135, 156), ground)
+            pygame.draw.polygon(self.canvas, (44, 76, 93), ground, line)
+            tower = pygame.Rect(round(cx-half_w*0.22), round(ground_y-half_h*1.25), max(12,round(half_w*0.44)), max(18,round(half_h*1.2)))
+            pygame.draw.rect(self.canvas, (91, 148, 171), tower)
+            pygame.draw.rect(self.canvas, (37, 83, 107), tower, line)
+            cap = pygame.Rect(tower.x-line, tower.y-line, tower.width+line*2, max(5,round(7*z)))
+            pygame.draw.rect(self.canvas, (177, 201, 194), cap)
+            pygame.draw.rect(self.canvas, (52, 99, 118), cap, line)
+            pygame.draw.line(self.canvas, (211, 226, 204), (tower.x+line, tower.centery), (tower.right-line, tower.centery), line)
+            pygame.draw.rect(self.canvas, (217, 229, 205), (round(cx-2*z), tower.bottom, max(3,round(4*z)), max(6,round(8*z))))
             return
 
         if kind == "decor_tree":
