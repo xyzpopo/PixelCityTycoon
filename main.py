@@ -108,20 +108,11 @@ C = {
     "white": (255, 255, 245),
 }
 
-TOOL_NAMES = [
-    "F1 이동", "F2 제거", "F3 도로", "F4 건설", "F8 복원"
-]
+TOOL_NAMES = ["F1 이동", "F2 제거", "F3 도로", "F4 건설", "F5 복원"]
 TOOL_KEYS = ["move", "remove", "road", "house", "restore"]
-
-KEY_BINDING_ACTIONS = (
-    ("move", "이동"), ("remove", "제거"), ("road", "도로"),
-    ("build", "건설"), ("restore", "복원"), ("save", "저장"),
-    ("load", "불러오기"), ("settings", "설정"), ("help", "도움말"),
-)
 DEFAULT_KEY_BINDINGS = {
     "move": pygame.K_F1, "remove": pygame.K_F2, "road": pygame.K_F3,
-    "build": pygame.K_F4, "restore": pygame.K_F8, "save": pygame.K_F5,
-    "load": pygame.K_F9, "settings": pygame.K_F10, "help": pygame.K_F11,
+    "build": pygame.K_F4, "restore": pygame.K_F5,
 }
 REMOVE_MODE_OPTIONS = (
     ("clear", "자연"),
@@ -363,6 +354,9 @@ class CityGame:
         self.save_dialog_confirm = False
         self.autosave_elapsed = 0.0
         self.last_load_success = False
+        self.menu_screen = "main"
+        self.in_game = False
+        self.menu_message = ""
         self.settings_open = False
         self.help_open = False
         self.sandbox_mode = False
@@ -2049,6 +2043,67 @@ class CityGame:
         except (OSError, ValueError, TypeError):
             return True, "읽을 수 없는 저장 파일"
 
+    def start_new_game(self) -> None:
+        """Generate a fresh city and enter single-player mode."""
+        self.generate_world(random.randint(100000, 999999999))
+        self.center_camera()
+        self.tutorial_started_at = time.time()
+        self.autosave_elapsed = 0.0
+        self.settings_open = False
+        self.help_open = False
+        self.save_dialog_mode = None
+        self.in_game = True
+        self.menu_screen = "main"
+        self.menu_message = ""
+        self.command_adapter.reset_world()
+        self.notify("새로운 도시를 시작합니다!", 3)
+
+    def return_to_main_menu(self) -> None:
+        """Autosave the active city before returning to the title screen."""
+        if self.in_game:
+            self.save_game(autosave=True)
+        self.in_game = False
+        self.menu_screen = "main"
+        self.settings_open = False
+        self.help_open = False
+        self.save_dialog_mode = None
+        self.modal_seed = False
+        self.close_build_palette()
+        self.tool_dragging = False
+        self.dragging = False
+
+    def handle_menu_click(self, pos: Tuple[int, int]) -> None:
+        x, y = pos
+        if self.save_dialog_mode is not None:
+            self.handle_save_dialog_click(pos)
+            return
+        if self.menu_screen == "main":
+            if pygame.Rect(382, 77, 210, 36).collidepoint(x, y):
+                self.menu_screen, self.menu_message = "single", ""
+            elif pygame.Rect(382, 121, 210, 36).collidepoint(x, y):
+                self.menu_screen = "multi"
+                self.menu_message = "온라인 멀티플레이 서버는 아직 연결되지 않았어요."
+            elif pygame.Rect(382, 165, 210, 36).collidepoint(x, y):
+                self.settings_open = True
+            elif pygame.Rect(382, 209, 210, 36).collidepoint(x, y):
+                self.help_open = True
+            elif pygame.Rect(382, 253, 210, 36).collidepoint(x, y):
+                self.running = False
+        elif self.menu_screen == "single":
+            if pygame.Rect(382, 111, 210, 38).collidepoint(x, y):
+                self.start_new_game()
+            elif pygame.Rect(382, 158, 210, 38).collidepoint(x, y):
+                self.open_save_dialog("load")
+            elif pygame.Rect(382, 258, 210, 34).collidepoint(x, y):
+                self.menu_screen = "main"
+        elif self.menu_screen == "multi":
+            if pygame.Rect(382, 111, 210, 38).collidepoint(x, y):
+                self.menu_message = "방 만들기는 온라인 멀티플레이 업데이트에서 제공할 예정이에요."
+            elif pygame.Rect(382, 158, 210, 38).collidepoint(x, y):
+                self.menu_message = "방 참가는 온라인 멀티플레이 업데이트에서 제공할 예정이에요."
+            elif pygame.Rect(382, 258, 210, 34).collidepoint(x, y):
+                self.menu_screen, self.menu_message = "main", ""
+
     def open_save_dialog(self, mode: str) -> None:
         if mode not in ("save", "load"):
             return
@@ -2079,6 +2134,9 @@ class CityGame:
                     if exists:
                         self.load_game(slot)
                         self.save_dialog_mode = None
+                        if self.last_load_success:
+                            self.in_game = True
+                            self.menu_screen = "main"
                     else:
                         self.notify(f"슬롯 {slot}은 비어 있어요.", 2)
                 elif exists:
@@ -2090,6 +2148,9 @@ class CityGame:
         if mode == "load" and 160 <= x <= 480 and 180 <= y <= 210:
             self.load_game(autosave=True)
             self.save_dialog_mode = None
+            if self.last_load_success:
+                self.in_game = True
+                self.menu_screen = "main"
             return
         if 160 <= x <= 315 and 220 <= y <= 250:
             self.export_save_json(self.save_dialog_selected)
@@ -2425,18 +2486,8 @@ class CityGame:
             self.sound_volume = float(clamp(saved_volume, 0.0, 1.0)) if isinstance(saved_volume, (int, float)) and not isinstance(saved_volume, bool) else 0.6
             saved_scale = data.get("window_scale", 2)
             self.window_scale = saved_scale if saved_scale in (1, 2, 3) else 2
+            # Ignore custom bindings from older saves: F1-F5 are fixed.
             self.key_bindings = DEFAULT_KEY_BINDINGS.copy()
-            saved_bindings = data.get("key_bindings", {})
-            if isinstance(saved_bindings, dict):
-                used_keys = set()
-                for action, _label in KEY_BINDING_ACTIONS:
-                    candidate = saved_bindings.get(action, DEFAULT_KEY_BINDINGS[action])
-                    if (type(candidate) is int and candidate not in (
-                        pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_BACKSPACE,
-                        pygame.K_TAB, pygame.K_SPACE
-                    ) and candidate not in used_keys):
-                        self.key_bindings[action] = candidate
-                        used_keys.add(candidate)
             self.window = pygame.display.set_mode(
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
@@ -4588,7 +4639,7 @@ class CityGame:
             return
         if self.modal_seed:
             return
-        if self.settings_open or self.help_open:
+        if self.settings_open or self.help_open or not self.in_game:
             self.handle_click(pos)
             return
         hit = self.build_palette_hit_test(pos)
@@ -4642,6 +4693,9 @@ class CityGame:
             self.handle_save_dialog_click(pos)
             return
         if self.modal_seed:
+            return
+        if not self.in_game:
+            self.handle_menu_click(pos)
             return
         virtual_key = self.virtual_key_at(pos)
         if virtual_key is not None:
@@ -4849,20 +4903,15 @@ class CityGame:
     def process_events(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                if self.in_game:
+                    self.save_game(autosave=True)
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.rebind_action is not None:
-                    if event.key == pygame.K_ESCAPE:
-                        self.rebind_action = None
-                        self.notify("키 변경을 취소했어요.", 2)
-                    else:
-                        self.assign_rebound_key(event.key)
-                    continue
                 if self.settings_open:
                     if event.key == pygame.K_ESCAPE:
                         self.settings_open = False
                 elif self.help_open:
-                    if event.key in (pygame.K_ESCAPE, pygame.K_F11):
+                    if event.key == pygame.K_ESCAPE:
                         self.help_open = False
                 elif self.save_dialog_mode is not None:
                     if event.key == pygame.K_ESCAPE:
@@ -4871,114 +4920,29 @@ class CityGame:
                 elif self.modal_seed:
                     if event.key == pygame.K_ESCAPE:
                         self.modal_seed = False
-                    elif event.key == pygame.K_RETURN:
-                        value = self.seed_text.strip()
-                        if value:
-                            try:
-                                seed = int(value) % 2147483647
-                            except ValueError:
-                                seed = sum((i + 1) * ord(ch) for i, ch in enumerate(value)) % 2147483647
+                elif not self.in_game:
+                    if event.key == pygame.K_ESCAPE:
+                        if self.menu_screen != "main":
+                            self.menu_screen = "main"
+                            self.menu_message = ""
                         else:
-                            seed = random.randint(100000, 999999999)
-                        self.generate_world(seed)
-                        self.center_camera()
-                        self.modal_seed = False
-                    elif event.key == pygame.K_BACKSPACE:
-                        self.seed_text = self.seed_text[:-1]
-                    elif event.unicode and event.unicode.isprintable() and len(self.seed_text) < 14:
-                        self.seed_text += event.unicode
+                            self.running = False
                 else:
-                    if event.key == self.key_bindings["settings"]:
-                        self.settings_open = True
-                    elif event.key == self.key_bindings["help"]:
-                        self.help_open = True
-                    elif event.key == pygame.K_ESCAPE:
+                    if event.key == pygame.K_ESCAPE:
                         if self.build_palette_open:
                             self.close_build_palette()
                         else:
-                            self.running = False
-                    elif event.key == pygame.K_g:
-                        if self.selected_structure_anchor is None:
-                            self.upgrade_selected_structure()
-                        else:
-                            self.command_adapter.dispatch(
-                                "upgrade_building",
-                                {"x": self.selected_structure_anchor[0],
-                                 "y": self.selected_structure_anchor[1]}
-                            )
-                    elif event.key == self.key_bindings["move"]:
-                        already_moving = self.tool == "move"
+                            self.return_to_main_menu()
+                    elif event.key == pygame.K_F1:
                         self.select_tool("move")
-                        if already_moving:
-                            self.notify("이동 모드가 이미 선택되어 있어요. 목적지를 클릭하세요.", 2)
-                    elif event.key == self.key_bindings["remove"]:
+                    elif event.key == pygame.K_F2:
                         self.select_tool("remove")
-                    elif event.key == self.key_bindings["road"]:
+                    elif event.key == pygame.K_F3:
                         self.select_tool("road")
-                    elif event.key == self.key_bindings["build"]:
+                    elif event.key == pygame.K_F4:
                         self.select_tool("house")
-                    elif event.key == self.key_bindings["restore"]:
+                    elif event.key == pygame.K_F5:
                         self.select_tool("restore")
-                    elif event.key == pygame.K_r and self.tool == "road":
-                        if self.selected_road_tile is None:
-                            self.toggle_road_direction()
-                        else:
-                            self.command_adapter.dispatch(
-                                "rotate_road",
-                                {"x": self.selected_road_tile[0], "y": self.selected_road_tile[1]}
-                            )
-                    elif event.key == pygame.K_q:
-                        self.rotate_map(-1)
-                    elif event.key == pygame.K_e:
-                        self.rotate_map(1)
-                    elif event.key == pygame.K_c:
-                        self.camera_follow_worker = not self.camera_follow_worker
-                        if self.camera_follow_worker:
-                            self.center_camera_on_worker()
-                        self.notify(
-                            "작업자 카메라 추적 켜짐" if self.camera_follow_worker
-                            else "작업자 카메라 추적 꺼짐", 2
-                        )
-                    elif event.key == pygame.K_u:
-                        self.underground_view = not self.underground_view
-                        self.notify(
-                            "지층 조사 보기 · 채굴장은 자동으로 지층을 채굴해요."
-                            if self.underground_view else "지상 보기", 2
-                        )
-                    elif event.key == pygame.K_LEFTBRACKET:
-                        if self.underground_view:
-                            self.underground_layer = max(1, self.underground_layer - 1)
-                            self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
-                        elif self.tool == "remove":
-                            self.cycle_remove_mode(-1)
-                        elif self.tool == "house":
-                            self.cycle_building_type(-1)
-                        elif self.tool == "restore":
-                            self.cycle_restore_mode(-1)
-                    elif event.key == pygame.K_RIGHTBRACKET:
-                        if self.underground_view:
-                            self.underground_layer = min(3, self.underground_layer + 1)
-                            self.notify(f"지하 지층 {self.underground_layer}/3", 1.5)
-                        elif self.tool == "remove":
-                            self.cycle_remove_mode(1)
-                        elif self.tool == "house":
-                            self.cycle_building_type(1)
-                        elif self.tool == "restore":
-                            self.cycle_restore_mode(1)
-                    elif event.key == pygame.K_1:
-                        self.select_tool("move")
-                    elif event.key == pygame.K_2:
-                        self.select_tool("remove")
-                    elif event.key == pygame.K_3:
-                        self.select_tool("road")
-                    elif event.key == pygame.K_4:
-                        self.select_tool("house")
-                    elif event.key == pygame.K_5:
-                        self.select_tool("restore")
-                    elif event.key == self.key_bindings["save"]:
-                        self.save_game()
-                    elif event.key == self.key_bindings["load"]:
-                        self.load_game()
             elif event.type == pygame.FINGERDOWN:
                 self.touch_input_active = True
                 logical = (
@@ -5037,6 +5001,10 @@ class CityGame:
                         self.handle_click(logical)
                     continue
                 if self.settings_open or self.help_open:
+                    if event.button == 1:
+                        self.handle_click(logical)
+                    continue
+                if not self.in_game:
                     if event.button == 1:
                         self.handle_click(logical)
                     continue
@@ -5516,7 +5484,7 @@ class CityGame:
         self.canvas.blit(overlay, (0, TOP_H))
 
     def update(self, dt: float) -> None:
-        if self.save_dialog_mode is not None or self.settings_open or self.help_open:
+        if not self.in_game or self.save_dialog_mode is not None or self.settings_open or self.help_open:
             return
         self.update_worker(dt)
         if not self.modal_seed:
@@ -5588,8 +5556,11 @@ class CityGame:
             self.notify("좋아요! 이제 제거 모드로 나무 2개를 치워 건설 공간을 만드세요.", 4)
 
     def draw(self) -> None:
-        self.draw_world()
-        self.draw_ui()
+        if self.in_game:
+            self.draw_world()
+            self.draw_ui()
+        else:
+            self.draw_menu()
         # Pixel-perfect upscale: no smoothing.
         scaled = pygame.transform.scale(self.canvas, self.window.get_size())
         self.window.blit(scaled, (0, 0))
