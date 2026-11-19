@@ -4122,20 +4122,20 @@ class CityGame:
         tool_xs = [4, 52, 100, 148, 196]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
             self.button(
-                pygame.Rect(tool_xs[i], 294, 43, 23),
+                pygame.Rect(tool_xs[i], 292, 46, 28),
                 name, self.tool == key, small=True
             )
         if self.tool == "remove":
             remove_xs = [248, 296, 344]
             for index, (mode, label) in enumerate(REMOVE_MODE_OPTIONS):
                 self.button(
-                    pygame.Rect(remove_xs[index], 294, 43, 23),
+                    pygame.Rect(remove_xs[index], 292, 46, 28),
                     label, self.remove_mode == mode, small=True
                 )
         elif self.tool == "restore":
             for index, (mode, label) in enumerate(RESTORE_MODE_OPTIONS):
                 self.button(
-                    pygame.Rect([248, 296, 344][index], 294, 43, 23),
+                    pygame.Rect([248, 296, 344][index], 292, 46, 28),
                     label, self.restore_mode == mode, small=True
                 )
 
@@ -4596,7 +4596,7 @@ class CityGame:
                 self.open_save_dialog("load")
             return
         if y >= BOTTOM_Y:
-            if 294 <= y <= 317:
+            if 292 <= y <= 322:
                 tool_xs = [4, 52, 100, 148, 196]
                 for i, tx in enumerate(tool_xs):
                     if tx <= x <= tx + 46:
@@ -4609,18 +4609,18 @@ class CityGame:
                             self.set_remove_mode(REMOVE_MODE_OPTIONS[index][0])
                             return
                 elif self.tool == "restore":
-                    for index, tx in enumerate((234, 280, 326)):
+                    for index, tx in enumerate((248, 296, 344)):
                         if tx <= x <= tx + 46:
                             self.restore_mode = RESTORE_MODE_OPTIONS[index][0]
                             self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
                             return
-            if 373 <= x <= 461 and 294 <= y <= 317:
+            if 396 <= x <= 474 and 292 <= y <= 322:
                 self.expand_land()
                 return
-            if 468 <= x <= 510 and 294 <= y <= 317:
+            if 480 <= x <= 526 and 292 <= y <= 322:
                 self.settings_open = True
                 return
-            if 515 <= x <= 557 and 294 <= y <= 317:
+            if 532 <= x <= 578 and 292 <= y <= 322:
                 self.help_open = True
                 return
             return
