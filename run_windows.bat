@@ -19,8 +19,9 @@ if errorlevel 1 goto failed
 if not exist "assets\fonts\NotoSansKR[wght].ttf" (
     echo Downloading Korean font...
     if not exist "assets\fonts" mkdir "assets\fonts"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$client = New-Object System.Net.WebClient; try { $client.DownloadFile('https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%%5Bwght%%5D.ttf', 'assets\fonts\NotoSansKR[wght].ttf') } catch { Write-Error $_; exit 1 }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $client = New-Object System.Net.WebClient; try { $client.DownloadFile('https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%%5Bwght%%5D.ttf', 'assets\fonts\NotoSansKR[wght].ttf') } catch { Write-Error $_; exit 1 }"
     if errorlevel 1 goto failed
+    if not exist "assets\fonts\NotoSansKR[wght].ttf" goto failed
 )
 
 echo Installing or checking pygame-ce...
