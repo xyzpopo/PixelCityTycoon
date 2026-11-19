@@ -278,5 +278,62 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertEqual(self.game.restore_mode, "terrain")
         self.game.handle_click((500, 305))
         self.assertTrue(self.game.settings_open)
+
+    def test_road_house_build_rotation_and_demolition_flow(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        road = (sx + 2, sy)
+        house = (sx + 3, sy)
+        for x, y in (road, house):
+            self.game.terrain[x][y].terrain = "grass"
+            self.game.terrain[x][y].height = 0
+            self.game.trees.discard((x, y))
+            self.game.rocks.discard((x, y))
+        self.game.worker_x, self.game.worker_y = sx, sy
+        self.game.money = 100_000
+        self.game.wood = 20
+        self.game.stone = 20
+        self.assertTrue(self.game.perform_build_order("road", *road, start_animation=False))
+        self.assertTrue(self.game.perform_build_order("house", *house, start_animation=False))
+        self.assertIn(road, self.game.roads)
+        self.assertIn(house, self.game.houses)
+        self.assertEqual(self.game.population, 4)
+        self.game.tool = "road"
+        self.game.selected_road_tile = road
+        self.game.road_directions[road] = "x"
+        self.game.toggle_road_direction()
+        self.assertEqual(self.game.road_directions[road], "y")
+        self.assertTrue(self.game.demolish_structure_at(*house, start_animation=False))
+        self.assertNotIn(house, self.game.houses)
+        self.assertEqual(self.game.population, 0)
+
+    def test_terrain_dig_and_restore_resource_flow(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        target = (sx + 4, sy + 2)
+        self.game.terrain[target[0]][target[1]].terrain = "mountain"
+        self.game.terrain[target[0]][target[1]].height = 2
+        self.game.stone = 0
+        self.assertTrue(self.game.dig_terrain_at(*target))
+        self.assertEqual(self.game.terrain[target[0]][target[1]].height, 1)
+        self.assertEqual(self.game.stone, main.DIG_STONE_REWARD)
+        self.assertTrue(self.game.dig_terrain_at(*target))
+        self.assertEqual(self.game.terrain[target[0]][target[1]].terrain, "grass")
+        self.assertEqual(self.game.stone, main.DIG_STONE_REWARD * 2)
+        self.assertTrue(self.game.restore_terrain_at(*target))
+        self.assertEqual(self.game.terrain[target[0]][target[1]].height, 1)
+        self.assertEqual(self.game.stone, main.DIG_STONE_REWARD * 2 - main.TERRAIN_RESTORE_STONE_COST)
+
+    def test_reserved_tree_and_rock_restore_execute_at_impact(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        tree = (sx + 1, sy + 1)
+        rock = (sx - 1, sy - 1)
+        self.game.money = 1000
+        self.game.work_queue = [("restore_tree", *tree)]
+        self.game.worker_pending_action = ("restore_tree", *tree)
+        self.game.complete_pending_work_action()
+        self.assertIn(tree, self.game.trees)
+        self.game.work_queue = [("restore_rock", *rock)]
+        self.game.worker_pending_action = ("restore_rock", *rock)
+        self.game.complete_pending_work_action()
+        self.assertIn(rock, self.game.rocks)
 if __name__ == "__main__":
     unittest.main()
