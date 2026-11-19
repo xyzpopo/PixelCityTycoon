@@ -171,6 +171,19 @@ CITY_OBJECT_DEFS = {
         "label": "벌목장", "w": 2, "h": 2,
         "money": 7000, "wood": 3, "stone": 2,
         "road": True, "jobs": 6, "income": 0, "maintenance": 18,
+        "power_use": 1, "water_use": 1,
+    },
+    "power": {
+        "label": "발전소", "w": 2, "h": 2,
+        "money": 11000, "wood": 4, "stone": 4,
+        "road": True, "jobs": 3, "income": 0, "maintenance": 45,
+        "power_output": 48, "service_range": 9, "pollution": 16,
+    },
+    "water": {
+        "label": "급수탑", "w": 2, "h": 2,
+        "money": 7000, "wood": 2, "stone": 4,
+        "road": True, "jobs": 2, "income": 0, "maintenance": 22,
+        "water_output": 48, "service_range": 9, "pollution": 0,
     },
 }
 BUILDING_CYCLE = [
@@ -187,6 +200,8 @@ BUILD_MENU_ITEMS = [
     ("decor_tree", "조경수", "1×1"),
     ("mine", "채굴장", "1×1"),
     ("logging", "벌목장", "2×2"),
+    ("power", "발전소", "2×2"),
+    ("water", "급수탑", "2×2"),
 ]
 LUMBER_CAMP_DURATION_MINUTES = 6 * 60
 LUMBER_CAMP_WOOD_PER_CYCLE = 4
@@ -328,6 +343,11 @@ class CityGame:
         self.save_dialog_selected = 1
         self.save_dialog_confirm = False
         self.autosave_elapsed = 0.0
+        self.settings_open = False
+        self.help_open = False
+        self.sandbox_mode = False
+        self.sound_enabled = True
+        self.window_scale = 2
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
         self.tutorial_step = 0
@@ -478,6 +498,8 @@ class CityGame:
         return pygame.mixer.Sound(buffer=samples.tobytes())
 
     def play_worker_action_sound(self, action: str) -> None:
+        if not self.sound_enabled:
+            return
         sound = self.worker_sounds.get(action)
         if sound is not None:
             try:
@@ -1037,7 +1059,8 @@ class CityGame:
 
     def build_palette_geometry(self) -> Tuple[pygame.Rect, List[pygame.Rect]]:
         """Return an anchored 3x3 building palette clamped inside the map view."""
-        width, height = 246, 132
+        rows = math.ceil(len(BUILD_MENU_ITEMS) / 3)
+        width, height = 246, 24 + rows * 30 + max(0, rows - 1) * 4 + 18
         anchor = self.build_palette_anchor or (self.worker_x, self.worker_y)
         ax, ay = self.tile_to_screen(*anchor)
         px = round(ax + 18)
@@ -1176,7 +1199,7 @@ class CityGame:
         wood_cost = base_wood + level
         stone_cost = base_stone + level
         reserved_wood, reserved_stone = self.reserved_material_costs()
-        if self.money - self.reserved_build_cost() < money_cost:
+        if not self.sandbox_mode and self.money - self.reserved_build_cost() < money_cost:
             self.notify(f"업그레이드 자금이 부족해요. 필요 자금 ₩{money_cost:,}", 2.5)
             return
         if (self.wood - reserved_wood < wood_cost
@@ -1437,7 +1460,7 @@ class CityGame:
         available_stone = self.stone - reserved_stone
         money_cost, wood_cost, stone_cost = self.order_costs(tool, x, y)
 
-        if available_money < money_cost:
+        if not self.sandbox_mode and available_money < money_cost:
             return False, f"건설 자금이 부족해요. 필요 자금: ₩{money_cost:,}"
         if available_wood < wood_cost or available_stone < stone_cost:
             return False, f"필요 재료: 목재 {wood_cost}개 · 석재 {stone_cost}개"
@@ -1692,7 +1715,8 @@ class CityGame:
                 self.notify("예약한 도로 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
                 return False
             money_cost, wood_cost, stone_cost = self.road_build_cost(x, y)
-            if self.money < money_cost or self.wood < wood_cost or self.stone < stone_cost:
+            if ((not self.sandbox_mode and self.money < money_cost)
+                    or self.wood < wood_cost or self.stone < stone_cost):
                 self.notify("도로 또는 다리 건설에 필요한 자원이 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
             self.money -= money_cost
@@ -1719,8 +1743,8 @@ class CityGame:
             if not self.has_adjacent_road(x, y):
                 self.notify("예약한 집 옆에 도로가 없어 건설을 건너뛰었어요.", 2.8)
                 return False
-            if (self.money < HOUSE_MONEY_COST or self.wood < HOUSE_WOOD_COST
-                    or self.stone < HOUSE_STONE_COST):
+            if ((not self.sandbox_mode and self.money < HOUSE_MONEY_COST)
+                    or self.wood < HOUSE_WOOD_COST or self.stone < HOUSE_STONE_COST):
                 self.notify("주택 건설에 필요한 자금 또는 자원이 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
             self.money -= HOUSE_MONEY_COST
@@ -1743,8 +1767,8 @@ class CityGame:
             if not self.can_build_mine_on(x, y):
                 self.notify("채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요.", 2.8)
                 return False
-            if (self.money < MINE_MONEY_COST or self.wood < MINE_WOOD_COST
-                    or self.stone < MINE_STONE_COST):
+            if ((not self.sandbox_mode and self.money < MINE_MONEY_COST)
+                    or self.wood < MINE_WOOD_COST or self.stone < MINE_STONE_COST):
                 self.notify("채굴장 건설에 필요한 자금 또는 자원이 부족해요.", 2.8)
                 return False
             self.money -= MINE_MONEY_COST
@@ -1765,7 +1789,8 @@ class CityGame:
                 self.notify("예약한 건물/시설의 점유 공간을 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
                 return False
             money_cost, wood_cost, stone_cost = self.order_costs(tool, x, y)
-            if self.money < money_cost or self.wood < wood_cost or self.stone < stone_cost:
+            if ((not self.sandbox_mode and self.money < money_cost)
+                    or self.wood < wood_cost or self.stone < stone_cost):
                 self.notify("건설에 필요한 자금 또는 재료가 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
             self.money -= money_cost
@@ -1896,14 +1921,18 @@ class CityGame:
         elif tool == "restore":
             self.restore_terrain_at(x, y)
         elif tool == "restore_tree":
-            if self.terrain[x][y].terrain == "grass" and self.money >= RESTORE_TREE_MONEY_COST:
+            if (self.terrain[x][y].terrain == "grass"
+                    and (self.sandbox_mode or self.money >= RESTORE_TREE_MONEY_COST)):
                 self.trees.add((x, y))
-                self.money -= RESTORE_TREE_MONEY_COST
+                if not self.sandbox_mode:
+                    self.money -= RESTORE_TREE_MONEY_COST
                 self.notify(f"나무를 복원했어요 · -₩{RESTORE_TREE_MONEY_COST:,}")
         elif tool == "restore_rock":
-            if self.terrain[x][y].terrain == "grass" and self.money >= RESTORE_ROCK_MONEY_COST:
+            if (self.terrain[x][y].terrain == "grass"
+                    and (self.sandbox_mode or self.money >= RESTORE_ROCK_MONEY_COST)):
                 self.rocks.add((x, y))
-                self.money -= RESTORE_ROCK_MONEY_COST
+                if not self.sandbox_mode:
+                    self.money -= RESTORE_ROCK_MONEY_COST
                 self.notify(f"바위를 복원했어요 · -₩{RESTORE_ROCK_MONEY_COST:,}")
         else:
             built = self.perform_build_order(tool, x, y, start_animation=False)
@@ -1943,7 +1972,7 @@ class CityGame:
             self.notify("지도 전체를 개척했어요. 더 이상 확장할 땅이 없어요.", 2.8)
             return
         cost = costs[self.expand_level]
-        if self.money - self.reserved_build_cost() < cost:
+        if not self.sandbox_mode and self.money - self.reserved_build_cost() < cost:
             self.notify(f"예약된 건설 비용을 제외하면 확장 자금이 부족해요. 필요 자금: ₩{cost:,}")
             return
         self.money -= cost
@@ -2043,7 +2072,10 @@ class CityGame:
             self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
             return
         data = {
-            "version": 13,
+            "version": 14,
+            "sandbox_mode": self.sandbox_mode,
+            "sound_enabled": self.sound_enabled,
+            "window_scale": self.window_scale,
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
@@ -2129,6 +2161,7 @@ class CityGame:
             "work_path_active", "tool", "remove_mode", "restore_mode", "camera_x", "camera_y",
             "tutorial_step", "tutorial_done", "tutorial_removed",
             "tutorial_roads", "tutorial_house_built",
+            "sandbox_mode", "sound_enabled", "window_scale",
         )
         previous_state = {
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
@@ -2138,7 +2171,7 @@ class CityGame:
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
             saved_version = data.get("version", 1)
-            if type(saved_version) is not int or saved_version > 13:
+            if type(saved_version) is not int or saved_version > 14:
                 raise ValueError("이 저장 파일은 현재 게임 버전보다 새 버전에서 만들어졌어요.")
             saved_seed = data.get("seed")
             if type(saved_seed) is not int:
@@ -2341,6 +2374,13 @@ class CityGame:
             self.tutorial_removed = safe_saved_int(data.get("tutorial_removed", 0), 0, 0, 1000000)
             self.tutorial_roads = safe_saved_int(data.get("tutorial_roads", 0), 0, 0, 1000000)
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
+            self.sandbox_mode = bool(data.get("sandbox_mode", False))
+            self.sound_enabled = bool(data.get("sound_enabled", True))
+            saved_scale = data.get("window_scale", self.window_scale)
+            self.window_scale = saved_scale if saved_scale in (1, 2, 3) else 2
+            self.window = pygame.display.set_mode(
+                (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
+            )
             saved_restore_mode = data.get("restore_mode", "terrain")
             self.restore_mode = saved_restore_mode if saved_restore_mode in ("terrain", "tree", "rock") else "terrain"
             self.center_camera()
@@ -2979,6 +3019,32 @@ class CityGame:
             pygame.draw.rect(self.canvas, (244, 202, 91), glow.inflate(line*2, line*2))
             pygame.draw.rect(self.canvas, (255, 239, 167), glow)
             pygame.draw.rect(self.canvas, (255, 255, 216), glow, line)
+            return
+
+        if kind == "power":
+            pygame.draw.polygon(self.canvas, (101, 111, 105), ground)
+            pygame.draw.polygon(self.canvas, (48, 61, 61), ground, line)
+            block = pygame.Rect(round(cx-half_w*0.43), round(ground_y-half_h*0.68), max(16, round(half_w*0.86)), max(14, round(half_h*0.70)))
+            pygame.draw.rect(self.canvas, (82, 91, 91), block)
+            pygame.draw.rect(self.canvas, (160, 165, 148), block, line)
+            chimney = pygame.Rect(round(cx+half_w*0.18), round(ground_y-half_h*1.35), max(6,round(8*z)), max(22,round(25*z)))
+            pygame.draw.rect(self.canvas, (78, 84, 82), chimney)
+            pygame.draw.rect(self.canvas, (194, 105, 74), (chimney.x, chimney.y+round(8*z), chimney.width, max(3,round(4*z))))
+            for offset in (-0.20, 0.12):
+                pygame.draw.rect(self.canvas, (232, 198, 102), (round(cx+half_w*offset), round(ground_y-half_h*0.45), max(4,round(5*z)), max(5,round(7*z))))
+            return
+
+        if kind == "water":
+            pygame.draw.polygon(self.canvas, (91, 135, 156), ground)
+            pygame.draw.polygon(self.canvas, (44, 76, 93), ground, line)
+            tower = pygame.Rect(round(cx-half_w*0.22), round(ground_y-half_h*1.25), max(12,round(half_w*0.44)), max(18,round(half_h*1.2)))
+            pygame.draw.rect(self.canvas, (91, 148, 171), tower)
+            pygame.draw.rect(self.canvas, (37, 83, 107), tower, line)
+            cap = pygame.Rect(tower.x-line, tower.y-line, tower.width+line*2, max(5,round(7*z)))
+            pygame.draw.rect(self.canvas, (177, 201, 194), cap)
+            pygame.draw.rect(self.canvas, (52, 99, 118), cap, line)
+            pygame.draw.line(self.canvas, (211, 226, 204), (tower.x+line, tower.centery), (tower.right-line, tower.centery), line)
+            pygame.draw.rect(self.canvas, (217, 229, 205), (round(cx-2*z), tower.bottom, max(3,round(4*z)), max(6,round(8*z))))
             return
 
         if kind == "decor_tree":
@@ -3941,6 +4007,8 @@ class CityGame:
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
         self.button(pygame.Rect(373, 294, 88, 23), "땅 확장", small=True)
+        self.button(pygame.Rect(468, 294, 42, 23), "설정", small=True)
+        self.button(pygame.Rect(515, 294, 42, 23), "도움", small=True)
         self.text(
             self.canvas, f"{cost_text} · {self.expand_level}/4",
             417, 326, 9, C["gold"], center=True
@@ -3978,6 +4046,75 @@ class CityGame:
             self.draw_seed_modal()
         self.draw_build_palette()
         self.draw_save_dialog()
+        self.draw_settings_modal()
+        self.draw_help_modal()
+
+    def handle_settings_click(self, pos: Tuple[int, int]) -> None:
+        x, y = pos
+        if 190 <= x <= 450 and 112 <= y <= 145:
+            self.sandbox_mode = not self.sandbox_mode
+            self.notify("샌드박스 경제 켜짐 · 자금 부족으로 건설이 막히지 않아요." if self.sandbox_mode else "일반 경제 모드로 전환했어요.", 3)
+        elif 190 <= x <= 450 and 154 <= y <= 187:
+            self.sound_enabled = not self.sound_enabled
+            self.notify("효과음 켜짐" if self.sound_enabled else "효과음 꺼짐", 2)
+        elif 190 <= x <= 450 and 196 <= y <= 229:
+            self.window_scale = self.window_scale % 3 + 1
+            self.window = pygame.display.set_mode(
+                (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
+            )
+            self.notify(f"화면 크기: {self.window_scale}배", 2)
+        elif 325 <= x <= 450 and 250 <= y <= 282:
+            self.settings_open = False
+
+    def draw_settings_modal(self) -> None:
+        if not self.settings_open:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 190))
+        self.canvas.blit(shade, (0, 0))
+        panel = pygame.Rect(142, 70, 356, 228)
+        pygame.draw.rect(self.canvas, C["panel"], panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        self.text(self.canvas, "게임 설정", panel.centerx, 91, 14, C["gold"], center=True)
+        rows = [
+            (112, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
+            (154, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
+            (196, "화면 크기", f"{self.window_scale}배"),
+        ]
+        for top, label, value in rows:
+            rect = pygame.Rect(190, top, 260, 34)
+            pygame.draw.rect(self.canvas, C["panel2"], rect)
+            pygame.draw.rect(self.canvas, (104, 122, 112), rect, 1)
+            self.text(self.canvas, label, 202, top + 10, 10, C["text"])
+            self.text(self.canvas, value, 435, top + 10, 10, C["gold"], center=True)
+        self.text(self.canvas, "돈이 부족해도 건설할 수 있지만 목재와 석재는 소비됩니다.", panel.centerx, 240, 7, C["muted"], center=True)
+        self.button(pygame.Rect(325, 250, 125, 32), "닫기", small=True)
+
+    def draw_help_modal(self) -> None:
+        if not self.help_open:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 195))
+        self.canvas.blit(shade, (0, 0))
+        panel = pygame.Rect(82, 35, 476, 290)
+        pygame.draw.rect(self.canvas, C["panel"], panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        self.text(self.canvas, "조작법 / 게임 도움말", panel.centerx, 51, 14, C["gold"], center=True)
+        help_lines = [
+            "F1 이동 · F2 제거 · F3 도로 · F4 건설 · F8 복원",
+            "1~5: 모드 선택 · [ / ]: 하위 작업/건물 종류 변경",
+            "마우스 왼쪽 클릭: 선택 및 예약 · 드래그: 연속 작업 예약",
+            "가운데 버튼 드래그 / WASD: 카메라 이동 · 휠: 확대/축소",
+            "Q/E: 지도 회전 · C: 작업자 추적 · U: 지층 조사",
+            "F3 도로 선택 후 R: 방향 회전 · F4 건물 선택 후 G: 업그레이드",
+            "F5 저장 · F9 불러오기 · F10 설정 · F11 도움말 · ESC 닫기",
+            "주택은 도로 옆에 건설해야 하며, 건설 예약은 자금과 재료를 확보합니다.",
+            "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
+            "저장/불러오기에서 수동 슬롯 3개와 자동 저장본을 관리할 수 있습니다.",
+        ]
+        for index, line in enumerate(help_lines):
+            self.text(self.canvas, line, 105, 77 + index * 20, 8, C["text"])
+        self.button(pygame.Rect(430, 288, 112, 27), "닫기 (ESC)", small=True)
 
     def draw_save_dialog(self) -> None:
         if self.save_dialog_mode is None:
@@ -4038,7 +4175,9 @@ class CityGame:
     # Input and game loop
     # ------------------------------------------------------------------
     def logical_mouse(self, pos: Tuple[int, int]) -> Tuple[int, int]:
-        return pos[0] // WINDOW_SCALE, pos[1] // WINDOW_SCALE
+        scale_x = self.window.get_width() / LOGICAL_W
+        scale_y = self.window.get_height() / LOGICAL_H
+        return int(pos[0] / scale_x), int(pos[1] / scale_y)
 
     def virtual_key_buttons(self) -> List[Tuple[pygame.Rect, int, str]]:
         """Return context-sensitive on-screen keycaps after touch input is detected."""
@@ -4146,6 +4285,12 @@ class CityGame:
 
     def handle_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
+        if self.settings_open:
+            self.handle_settings_click(pos)
+            return
+        if self.help_open:
+            self.help_open = False
+            return
         if self.save_dialog_mode is not None:
             self.handle_save_dialog_click(pos)
             return
@@ -4185,6 +4330,12 @@ class CityGame:
                             return
             if 373 <= x <= 461 and 294 <= y <= 317:
                 self.expand_land()
+                return
+            if 468 <= x <= 510 and 294 <= y <= 317:
+                self.settings_open = True
+                return
+            if 515 <= x <= 557 and 294 <= y <= 317:
+                self.help_open = True
                 return
             return
         if VIEW_RECT.collidepoint(x, y):
@@ -4351,7 +4502,13 @@ class CityGame:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.save_dialog_mode is not None:
+                if self.settings_open:
+                    if event.key == pygame.K_ESCAPE:
+                        self.settings_open = False
+                elif self.help_open:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_F11):
+                        self.help_open = False
+                elif self.save_dialog_mode is not None:
                     if event.key == pygame.K_ESCAPE:
                         self.save_dialog_mode = None
                         self.save_dialog_confirm = False
@@ -4375,7 +4532,11 @@ class CityGame:
                     elif event.unicode and event.unicode.isprintable() and len(self.seed_text) < 14:
                         self.seed_text += event.unicode
                 else:
-                    if event.key == pygame.K_ESCAPE:
+                    if event.key == pygame.K_F10:
+                        self.settings_open = True
+                    elif event.key == pygame.K_F11:
+                        self.help_open = True
+                    elif event.key == pygame.K_ESCAPE:
                         if self.build_palette_open:
                             self.close_build_palette()
                         else:
@@ -4635,8 +4796,220 @@ class CityGame:
                 jobs += int(CITY_OBJECT_DEFS[kind]["jobs"]) * max(1, int(data.get("level", 1)))
         return jobs
 
+    def city_building_footprints(self) -> List[Tuple[str, Set[Tuple[int, int]], int, int]]:
+        """Return service demand for every home and occupied city facility."""
+        buildings: List[Tuple[str, Set[Tuple[int, int]], int, int]] = []
+        for anchor in self.houses:
+            level = self.house_levels.get(anchor, 1)
+            buildings.append(("house", {anchor}, 2 + level, 2 + level))
+        for anchor, data in self.city_objects.items():
+            kind = data.get("type")
+            spec = CITY_OBJECT_DEFS.get(kind)
+            if spec is None or kind in ("power", "water"):
+                continue
+            level = max(1, int(data.get("level", 1)))
+            buildings.append((
+                str(kind), self.footprint_for(str(kind), *anchor),
+                int(spec.get("power_use", 2)) * level,
+                int(spec.get("water_use", 2)) * level,
+            ))
+        return buildings
+
+    @staticmethod
+    def footprint_distance(first: Set[Tuple[int, int]], second: Set[Tuple[int, int]]) -> int:
+        if not first or not second:
+            return 10 ** 6
+        return min(abs(ax - bx) + abs(ay - by)
+                   for ax, ay in first for bx, by in second)
+
+    def calculate_city_metrics(self) -> Dict[str, int]:
+        """Calculate housing, jobs, utility coverage, environment and traffic."""
+        housing = sum(4 + 2 * (self.house_levels.get(pos, 1) - 1) for pos in self.houses)
+        job_capacity = self.available_city_jobs()
+        job_demand = math.ceil(self.population * 0.60)
+        power_sources = []
+        water_sources = []
+        power_capacity = 0
+        water_capacity = 0
+        parks = 0
+        industry_count = 0
+        pollution = 0
+        for anchor, data in self.city_objects.items():
+            kind = data.get("type")
+            spec = CITY_OBJECT_DEFS.get(kind)
+            if spec is None:
+                continue
+            level = max(1, int(data.get("level", 1)))
+            footprint = self.footprint_for(str(kind), *anchor)
+            if kind == "power":
+                power_capacity += int(spec.get("power_output", 0)) * level
+                power_sources.append((footprint, int(spec.get("service_range", 9))))
+            elif kind == "water":
+                water_capacity += int(spec.get("water_output", 0)) * level
+                water_sources.append((footprint, int(spec.get("service_range", 9))))
+            elif kind == "park":
+                parks += 1
+            elif kind == "industrial":
+                industry_count += 1
+            pollution += int(spec.get("pollution", 0)) * level
+
+        buildings = self.city_building_footprints()
+        resident_demand = math.ceil(self.population / 3)
+        power_demand = resident_demand + sum(item[2] for item in buildings)
+        water_demand = resident_demand + sum(item[3] for item in buildings)
+        covered_power = 0
+        covered_water = 0
+        for _kind, footprint, power_use, water_use in buildings:
+            if any(self.footprint_distance(footprint, source) <= radius
+                   for source, radius in power_sources):
+                covered_power += power_use
+            if any(self.footprint_distance(footprint, source) <= radius
+                   for source, radius in water_sources):
+                covered_water += water_use
+
+        power_supply = 100 if power_demand == 0 else min(100, power_capacity * 100 // power_demand)
+        water_supply = 100 if water_demand == 0 else min(100, water_capacity * 100 // water_demand)
+        building_power_demand = max(1, power_demand - resident_demand)
+        building_water_demand = max(1, water_demand - resident_demand)
+        power_range = 100 if power_demand == 0 else min(100, covered_power * 100 // building_power_demand)
+        water_range = 100 if water_demand == 0 else min(100, covered_water * 100 // building_water_demand)
+        power_ratio = min(power_supply, power_range)
+        water_ratio = min(water_supply, water_range)
+
+        sx, sy = MAP_W // 2, MAP_H // 2
+        nearby_trees = sum(1 for x, y in self.trees if abs(x - sx) + abs(y - sy) <= 12)
+        environment = int(clamp(
+            55 + min(nearby_trees, 24) * 1.5 + parks * 8
+            - industry_count * 9 - pollution * 0.35, 0, 100
+        ))
+        road_capacity = len(self.roads) * 3
+        traffic_demand = self.population + job_demand
+        congestion = 0 if traffic_demand == 0 else (
+            100 if road_capacity == 0 else int(clamp(traffic_demand * 100 / road_capacity, 0, 100))
+        )
+        housing_ratio = 100 if self.population == 0 else min(100, housing * 100 // max(1, self.population))
+        employment_ratio = 100 if job_demand == 0 else min(100, job_capacity * 100 // job_demand)
+        park_access = min(100, parks * 30)
+        happiness = round(
+            housing_ratio * 0.20 + employment_ratio * 0.14
+            + power_ratio * 0.18 + water_ratio * 0.18
+            + environment * 0.15 + (100 - congestion) * 0.10
+            + park_access * 0.05
+        )
+        return {
+            "housing": housing, "jobs": job_capacity, "job_demand": job_demand,
+            "power": power_capacity, "power_demand": power_demand, "power_ratio": power_ratio,
+            "water": water_capacity, "water_demand": water_demand, "water_ratio": water_ratio,
+            "environment": environment, "congestion": congestion,
+            "happiness": int(clamp(happiness, 0, 100)),
+        }
+
+    def update_city_population(self) -> int:
+        """Move residents in/out once per day based on housing and city services."""
+        metrics = self.calculate_city_metrics()
+        vacant_homes = max(0, metrics["housing"] - self.population)
+        job_vacancies = max(0, metrics["jobs"] - metrics["job_demand"])
+        change = 0
+        if metrics["happiness"] >= 62 and vacant_homes > 0 and job_vacancies > 0:
+            change = min(2, vacant_homes, max(1, job_vacancies))
+        elif metrics["happiness"] < 28 and self.population > 0:
+            change = -1
+        if change:
+            self.population = max(0, self.population + change)
+        return change
+
+    def update_citizen_traffic(self, dt: float) -> None:
+        """Move a representative group of residents along road tiles."""
+        roads = sorted(self.roads)
+        if not roads or self.population <= 0:
+            self.citizens = []
+            return
+        desired = min(12, self.population // 3)
+        while len(self.citizens) < desired:
+            position = roads[self.citizen_rng.randrange(len(roads))]
+            self.citizens.append({
+                "from": position, "to": position, "previous": None, "elapsed": 0.0
+            })
+        self.citizens = self.citizens[:desired]
+        for citizen in self.citizens:
+            current = citizen["to"]
+            if current not in self.roads:
+                current = roads[self.citizen_rng.randrange(len(roads))]
+                citizen.update({"from": current, "to": current, "previous": None, "elapsed": 0.0})
+            citizen["elapsed"] = float(citizen.get("elapsed", 0.0)) + max(0.0, dt)
+            while citizen["elapsed"] >= 1.25:
+                current = citizen["to"]
+                neighbors = [
+                    (current[0] + dx, current[1] + dy)
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                    if (current[0] + dx, current[1] + dy) in self.roads
+                ]
+                previous = citizen.get("previous")
+                choices = [pos for pos in neighbors if pos != previous] or neighbors
+                if not choices:
+                    citizen.update({"from": current, "to": current, "previous": None, "elapsed": 0.0})
+                    break
+                next_tile = choices[self.citizen_rng.randrange(len(choices))]
+                citizen["from"] = current
+                citizen["to"] = next_tile
+                citizen["previous"] = current
+                citizen["elapsed"] = float(citizen["elapsed"]) - 1.25
+
+    def draw_citizen_traffic(self) -> None:
+        """Render small pedestrian markers moving along roads."""
+        for index, citizen in enumerate(self.citizens):
+            start, end = citizen["from"], citizen["to"]
+            progress = clamp(float(citizen.get("elapsed", 0.0)) / 1.25, 0.0, 1.0)
+            sx, sy = self.tile_to_screen(*start)
+            ex, ey = self.tile_to_screen(*end)
+            cx = sx + (ex - sx) * progress
+            cy = sy + (ey - sy) * progress
+            pygame.draw.ellipse(
+                self.canvas, (35, 43, 40),
+                pygame.Rect(round(cx-3*self.zoom), round(cy+1*self.zoom),
+                            max(4, round(6*self.zoom)), max(2, round(3*self.zoom)))
+            )
+            shirt = ((219, 185, 119), (115, 174, 181), (185, 139, 151))[index % 3]
+            pygame.draw.rect(
+                self.canvas, shirt,
+                (round(cx-2*self.zoom), round(cy-5*self.zoom),
+                 max(3, round(4*self.zoom)), max(5, round(6*self.zoom)))
+            )
+            pygame.draw.circle(
+                self.canvas, (232, 194, 151),
+                (round(cx), round(cy-6*self.zoom)), max(2, round(2*self.zoom))
+            )
+
+    def draw_city_metrics_panel(self) -> None:
+        metrics = self.calculate_city_metrics()
+        panel = pygame.Rect(422, 36, 209, 48)
+        pygame.draw.rect(self.canvas, (28, 39, 43), panel)
+        pygame.draw.rect(self.canvas, (89, 106, 100), panel, 1)
+        happiness_color = C["green"] if metrics["happiness"] >= 65 else (
+            C["gold"] if metrics["happiness"] >= 40 else C["red"]
+        )
+        self.text(self.canvas, f"행복 {metrics['happiness']}%", 430, 41, 9, happiness_color)
+        self.text(self.canvas, f"전력 {metrics['power_ratio']}%  물 {metrics['water_ratio']}%", 430, 56, 8, C["text"])
+        self.text(self.canvas, f"환경 {metrics['environment']}  교통혼잡 {metrics['congestion']}%", 430, 69, 8, C["muted"])
+
+    def draw_lighting_overlay(self) -> None:
+        """Tint the world view based on the in-game clock."""
+        hour = self.game_minutes / 60.0
+        tint = None
+        if hour >= 21 or hour < 5:
+            tint = (22, 34, 66, 112)
+        elif hour >= 18:
+            tint = (104, 70, 45, round((hour - 18) / 3 * 66))
+        elif hour < 7:
+            tint = (92, 74, 60, round((7 - hour) / 2 * 52))
+        if tint is None:
+            return
+        overlay = pygame.Surface((LOGICAL_W, VIEW_RECT.height), pygame.SRCALPHA)
+        overlay.fill(tint)
+        self.canvas.blit(overlay, (0, TOP_H))
+
     def update(self, dt: float) -> None:
-        if self.save_dialog_mode is not None:
+        if self.save_dialog_mode is not None or self.settings_open or self.help_open:
             return
         self.update_worker(dt)
         if not self.modal_seed:
@@ -4706,7 +5079,7 @@ class CityGame:
         self.draw_world()
         self.draw_ui()
         # Pixel-perfect upscale: no smoothing.
-        scaled = pygame.transform.scale(self.canvas, (WINDOW_W, WINDOW_H))
+        scaled = pygame.transform.scale(self.canvas, self.window.get_size())
         self.window.blit(scaled, (0, 0))
         pygame.display.flip()
 
