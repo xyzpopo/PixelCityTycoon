@@ -66,7 +66,8 @@ def _validate_payload(action: str, payload: Any) -> Dict[str, Any]:
         if not isinstance(clean["tool"], str) or clean["tool"] not in {
             "clear", "demolish", "road", "house", "dig", "mine", "restore",
             "commercial", "industrial", "public", "park", "lamp",
-            "decor_tree", "logging",
+            "decor_tree", "logging", "restore_tree", "restore_rock",
+            "power", "water",
         }:
             raise ProtocolError("unsupported work tool")
     if action == "cancel_work":
