@@ -4787,6 +4787,13 @@ class CityGame:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
+                if self.rebind_action is not None:
+                    if event.key == pygame.K_ESCAPE:
+                        self.rebind_action = None
+                        self.notify("키 변경을 취소했어요.", 2)
+                    else:
+                        self.assign_rebound_key(event.key)
+                    continue
                 if self.settings_open:
                     if event.key == pygame.K_ESCAPE:
                         self.settings_open = False
@@ -4817,9 +4824,9 @@ class CityGame:
                     elif event.unicode and event.unicode.isprintable() and len(self.seed_text) < 14:
                         self.seed_text += event.unicode
                 else:
-                    if event.key == pygame.K_F10:
+                    if event.key == self.key_bindings["settings"]:
                         self.settings_open = True
-                    elif event.key == pygame.K_F11:
+                    elif event.key == self.key_bindings["help"]:
                         self.help_open = True
                     elif event.key == pygame.K_ESCAPE:
                         if self.build_palette_open:
@@ -4828,15 +4835,15 @@ class CityGame:
                             self.running = False
                     elif event.key == pygame.K_g:
                         self.upgrade_selected_structure()
-                    elif event.key == pygame.K_F1:
+                    elif event.key == self.key_bindings["move"]:
                         self.select_tool("move")
-                    elif event.key == pygame.K_F2:
+                    elif event.key == self.key_bindings["remove"]:
                         self.select_tool("remove")
-                    elif event.key == pygame.K_F3:
+                    elif event.key == self.key_bindings["road"]:
                         self.select_tool("road")
-                    elif event.key == pygame.K_F4:
+                    elif event.key == self.key_bindings["build"]:
                         self.select_tool("house")
-                    elif event.key == pygame.K_F8:
+                    elif event.key == self.key_bindings["restore"]:
                         self.select_tool("restore")
                     elif event.key == pygame.K_r and self.tool == "road":
                         self.toggle_road_direction()
@@ -4888,9 +4895,9 @@ class CityGame:
                         self.select_tool("house")
                     elif event.key == pygame.K_5:
                         self.select_tool("restore")
-                    elif event.key == pygame.K_F5:
+                    elif event.key == self.key_bindings["save"]:
                         self.save_game()
-                    elif event.key == pygame.K_F9:
+                    elif event.key == self.key_bindings["load"]:
                         self.load_game()
             elif event.type == pygame.FINGERDOWN:
                 self.touch_input_active = True
