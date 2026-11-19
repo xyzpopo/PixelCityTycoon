@@ -54,6 +54,17 @@ jobs:
       - name: Build Windows executable
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets/buildings;assets/buildings" --add-data "assets/fonts;assets/fonts" main.py
 
+      - name: Launch packaged EXE smoke test
+        shell: pwsh
+        run: |
+          $env:SDL_VIDEODRIVER = "dummy"
+          $env:SDL_AUDIODRIVER = "dummy"
+          $process = Start-Process -FilePath "dist/PixelCityTycoon.exe" -PassThru
+          Start-Sleep -Seconds 5
+          $process.Refresh()
+          if ($process.HasExited) { throw "The packaged game exited during startup smoke test (code $($process.ExitCode))." }
+          Stop-Process -Id $process.Id -Force
+
       - name: Verify executable
         shell: pwsh
         run: |
