@@ -355,6 +355,7 @@ class CityGame:
         self.help_open = False
         self.sandbox_mode = False
         self.sound_enabled = True
+        self.sound_volume = 0.6
         self.window_scale = 2
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
@@ -511,6 +512,7 @@ class CityGame:
         sound = self.worker_sounds.get(action)
         if sound is not None:
             try:
+                sound.set_volume(self.sound_volume)
                 sound.play()
             except pygame.error:
                 # The visual action still works if the mixer becomes unavailable.
@@ -2086,9 +2088,10 @@ class CityGame:
             self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
             return
         data = {
-            "version": 14,
+            "version": 15,
             "sandbox_mode": self.sandbox_mode,
             "sound_enabled": self.sound_enabled,
+            "sound_volume": self.sound_volume,
             "window_scale": self.window_scale,
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "seed": self.seed,
@@ -2178,7 +2181,7 @@ class CityGame:
             "work_path_active", "tool", "remove_mode", "restore_mode", "camera_x", "camera_y",
             "tutorial_step", "tutorial_done", "tutorial_removed",
             "tutorial_roads", "tutorial_house_built",
-            "sandbox_mode", "sound_enabled", "window_scale",
+            "sandbox_mode", "sound_enabled", "sound_volume", "window_scale",
         )
         previous_state = {
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
@@ -2193,7 +2196,7 @@ class CityGame:
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
             saved_version = data.get("version", 1)
-            if type(saved_version) is not int or saved_version > 14:
+            if type(saved_version) is not int or saved_version > 15:
                 raise ValueError("이 저장 파일은 현재 게임 버전보다 새 버전에서 만들어졌어요.")
             saved_seed = data.get("seed")
             if type(saved_seed) is not int:
@@ -2398,6 +2401,8 @@ class CityGame:
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
             self.sandbox_mode = bool(data.get("sandbox_mode", False))
             self.sound_enabled = bool(data.get("sound_enabled", True))
+            saved_volume = data.get("sound_volume", 0.6)
+            self.sound_volume = float(clamp(saved_volume, 0.0, 1.0)) if isinstance(saved_volume, (int, float)) and not isinstance(saved_volume, bool) else 0.6
             saved_scale = data.get("window_scale", 2)
             self.window_scale = saved_scale if saved_scale in (1, 2, 3) else 2
             self.window = pygame.display.set_mode(
@@ -4228,19 +4233,24 @@ class CityGame:
 
     def handle_settings_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
-        if 190 <= x <= 450 and 112 <= y <= 145:
+        if 190 <= x <= 450 and 96 <= y <= 128:
             self.sandbox_mode = not self.sandbox_mode
             self.notify("샌드박스 경제 켜짐 · 자금 부족으로 건설이 막히지 않아요." if self.sandbox_mode else "일반 경제 모드로 전환했어요.", 3)
-        elif 190 <= x <= 450 and 154 <= y <= 187:
+        elif 190 <= x <= 450 and 134 <= y <= 166:
             self.sound_enabled = not self.sound_enabled
             self.notify("효과음 켜짐" if self.sound_enabled else "효과음 꺼짐", 2)
-        elif 190 <= x <= 450 and 196 <= y <= 229:
+        elif 190 <= x <= 450 and 172 <= y <= 204:
+            levels = (0.0, 0.25, 0.5, 0.75, 1.0)
+            current = min(range(len(levels)), key=lambda i: abs(levels[i] - self.sound_volume))
+            self.sound_volume = levels[(current + 1) % len(levels)]
+            self.notify(f"효과음 음량: {round(self.sound_volume * 100)}%", 2)
+        elif 190 <= x <= 450 and 210 <= y <= 242:
             self.window_scale = self.window_scale % 3 + 1
             self.window = pygame.display.set_mode(
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
             self.notify(f"화면 크기: {self.window_scale}배", 2)
-        elif 325 <= x <= 450 and 250 <= y <= 282:
+        elif 325 <= x <= 450 and 274 <= y <= 306:
             self.settings_open = False
 
     def draw_settings_modal(self) -> None:
@@ -4249,23 +4259,24 @@ class CityGame:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 190))
         self.canvas.blit(shade, (0, 0))
-        panel = pygame.Rect(142, 70, 356, 228)
+        panel = pygame.Rect(142, 48, 356, 280)
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
-        self.text(self.canvas, "게임 설정", panel.centerx, 91, 14, C["gold"], center=True)
+        self.text(self.canvas, "게임 설정", panel.centerx, 66, 14, C["gold"], center=True)
         rows = [
-            (112, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
-            (154, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
-            (196, "화면 크기", f"{self.window_scale}배"),
+            (96, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
+            (134, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
+            (172, "효과음 음량", f"{round(self.sound_volume * 100)}%"),
+            (210, "화면 크기", f"{self.window_scale}배"),
         ]
         for top, label, value in rows:
-            rect = pygame.Rect(190, top, 260, 34)
+            rect = pygame.Rect(190, top, 260, 32)
             pygame.draw.rect(self.canvas, C["panel2"], rect)
             pygame.draw.rect(self.canvas, (104, 122, 112), rect, 1)
-            self.text(self.canvas, label, 202, top + 10, 10, C["text"])
-            self.text(self.canvas, value, 435, top + 10, 10, C["gold"], center=True)
-        self.text(self.canvas, "돈이 부족해도 건설할 수 있지만 목재와 석재는 소비됩니다.", panel.centerx, 240, 7, C["muted"], center=True)
-        self.button(pygame.Rect(325, 250, 125, 32), "닫기", small=True)
+            self.text(self.canvas, label, 202, top + 9, 10, C["text"])
+            self.text(self.canvas, value, 435, top + 9, 10, C["gold"], center=True)
+        self.text(self.canvas, "샌드박스는 자금 부족만 무시하며 목재·석재는 소비합니다.", panel.centerx, 254, 7, C["muted"], center=True)
+        self.button(pygame.Rect(325, 274, 125, 32), "닫기", small=True)
 
     def draw_help_modal(self) -> None:
         if not self.help_open:
