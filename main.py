@@ -3609,6 +3609,44 @@ class CityGame:
             (round(head_x - 1*z), helmet_y, max(2, round(2*z)), max(1, round(2*z)))
         )
 
+    def draw_time_of_day(self) -> None:
+        """Tint the playfield at night and illuminate placed street lamps."""
+        if self.underground_view:
+            return
+        hour = self.game_minutes / 60.0
+        if 5.0 <= hour < 7.0:
+            night = (7.0 - hour) / 2.0
+        elif 17.0 <= hour < 20.0:
+            night = (hour - 17.0) / 3.0
+        elif hour >= 20.0 or hour < 5.0:
+            night = 1.0
+        else:
+            night = 0.0
+        if night <= 0.01:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((13, 22, 49, round(105 * night)))
+        self.canvas.blit(shade, (0, 0))
+        if night < 0.12:
+            return
+        glow_layer = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        for (x, y), data in self.city_objects.items():
+            if data.get("type") != "lamp" or not self.is_unlocked(x, y):
+                continue
+            cx, cy = self.tile_to_screen(x, y)
+            if not VIEW_RECT.collidepoint(round(cx), round(cy)):
+                continue
+            radius = max(5, round(25 * self.zoom))
+            pygame.draw.circle(
+                glow_layer, (255, 205, 103, round(36 * night)),
+                (round(cx), round(cy - 15 * self.zoom)), radius
+            )
+            pygame.draw.circle(
+                glow_layer, (255, 229, 159, round(24 * night)),
+                (round(cx), round(cy - 15 * self.zoom)), max(3, radius // 2)
+            )
+        self.canvas.blit(glow_layer, (0, 0))
+
     def draw_world(self) -> None:
         self.canvas.fill(C["sky"])
         self.canvas.set_clip(VIEW_RECT)
@@ -3862,6 +3900,8 @@ class CityGame:
                         )
 
 
+        # Night lighting is applied after world objects but before the tutorial card.
+        self.draw_time_of_day()
         # Tutorial card.
         self.draw_tutorial_card()
         self.canvas.set_clip(None)
