@@ -1921,14 +1921,18 @@ class CityGame:
         elif tool == "restore":
             self.restore_terrain_at(x, y)
         elif tool == "restore_tree":
-            if self.terrain[x][y].terrain == "grass" and self.money >= RESTORE_TREE_MONEY_COST:
+            if (self.terrain[x][y].terrain == "grass"
+                    and (self.sandbox_mode or self.money >= RESTORE_TREE_MONEY_COST)):
                 self.trees.add((x, y))
-                self.money -= RESTORE_TREE_MONEY_COST
+                if not self.sandbox_mode:
+                    self.money -= RESTORE_TREE_MONEY_COST
                 self.notify(f"나무를 복원했어요 · -₩{RESTORE_TREE_MONEY_COST:,}")
         elif tool == "restore_rock":
-            if self.terrain[x][y].terrain == "grass" and self.money >= RESTORE_ROCK_MONEY_COST:
+            if (self.terrain[x][y].terrain == "grass"
+                    and (self.sandbox_mode or self.money >= RESTORE_ROCK_MONEY_COST)):
                 self.rocks.add((x, y))
-                self.money -= RESTORE_ROCK_MONEY_COST
+                if not self.sandbox_mode:
+                    self.money -= RESTORE_ROCK_MONEY_COST
                 self.notify(f"바위를 복원했어요 · -₩{RESTORE_ROCK_MONEY_COST:,}")
         else:
             built = self.perform_build_order(tool, x, y, start_animation=False)
@@ -4171,7 +4175,9 @@ class CityGame:
     # Input and game loop
     # ------------------------------------------------------------------
     def logical_mouse(self, pos: Tuple[int, int]) -> Tuple[int, int]:
-        return pos[0] // WINDOW_SCALE, pos[1] // WINDOW_SCALE
+        scale_x = self.window.get_width() / LOGICAL_W
+        scale_y = self.window.get_height() / LOGICAL_H
+        return int(pos[0] / scale_x), int(pos[1] / scale_y)
 
     def virtual_key_buttons(self) -> List[Tuple[pygame.Rect, int, str]]:
         """Return context-sensitive on-screen keycaps after touch input is detected."""
