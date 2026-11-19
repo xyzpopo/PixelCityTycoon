@@ -109,16 +109,19 @@ class CityGameRegressionTests(unittest.TestCase):
                 self.game.sound_enabled = False
                 self.game.sound_volume = 0.25
                 self.game.window_scale = 3
+                self.game.key_bindings["move"] = main.pygame.K_m
                 self.game.save_game(3)
                 self.game.sandbox_mode = False
                 self.game.sound_enabled = True
                 self.game.sound_volume = 1.0
                 self.game.window_scale = 1
+                self.game.key_bindings = main.DEFAULT_KEY_BINDINGS.copy()
                 self.game.load_game(3)
                 self.assertTrue(self.game.sandbox_mode)
                 self.assertFalse(self.game.sound_enabled)
                 self.assertEqual(self.game.sound_volume, 0.25)
                 self.assertEqual(self.game.window_scale, 3)
+                self.assertEqual(self.game.key_bindings["move"], main.pygame.K_m)
                 self.assertEqual(self.game.window.get_size(), (main.LOGICAL_W * 3, main.LOGICAL_H * 3))
 
         self.game.sandbox_mode = True
@@ -256,5 +259,16 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertTrue(all(map(lambda value: isinstance(value, (int, float)),
                                 (self.game.money, self.game.game_minutes, self.game.population))))
         self.game.draw()
+
+    def test_key_rebinding_swaps_conflicting_keys(self):
+        self.game.key_bindings = main.DEFAULT_KEY_BINDINGS.copy()
+        self.game.rebind_action = "move"
+        self.assertTrue(self.game.assign_rebound_key(main.pygame.K_F2))
+        self.assertEqual(self.game.key_bindings["move"], main.pygame.K_F2)
+        self.assertEqual(self.game.key_bindings["remove"], main.pygame.K_F1)
+        self.assertIsNone(self.game.rebind_action)
+        self.game.rebind_action = "road"
+        self.assertFalse(self.game.assign_rebound_key(main.pygame.K_ESCAPE))
+        self.assertEqual(self.game.rebind_action, "road")
 if __name__ == "__main__":
     unittest.main()
