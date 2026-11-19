@@ -4141,9 +4141,9 @@ class CityGame:
 
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
-        self.button(pygame.Rect(373, 294, 88, 23), "땅 확장", small=True)
-        self.button(pygame.Rect(468, 294, 42, 23), "설정", small=True)
-        self.button(pygame.Rect(515, 294, 42, 23), "도움", small=True)
+        self.button(pygame.Rect(396, 292, 78, 28), "땅 확장", small=True)
+        self.button(pygame.Rect(480, 292, 46, 28), "설정", small=True)
+        self.button(pygame.Rect(532, 292, 46, 28), "도움", small=True)
         self.text(
             self.canvas, f"{cost_text} · {self.expand_level}/4",
             417, 326, 9, C["gold"], center=True
