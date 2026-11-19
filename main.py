@@ -4790,6 +4790,218 @@ class CityGame:
                 jobs += int(CITY_OBJECT_DEFS[kind]["jobs"]) * max(1, int(data.get("level", 1)))
         return jobs
 
+    def city_building_footprints(self) -> List[Tuple[str, Set[Tuple[int, int]], int, int]]:
+        """Return service demand for every home and occupied city facility."""
+        buildings: List[Tuple[str, Set[Tuple[int, int]], int, int]] = []
+        for anchor in self.houses:
+            level = self.house_levels.get(anchor, 1)
+            buildings.append(("house", {anchor}, 2 + level, 2 + level))
+        for anchor, data in self.city_objects.items():
+            kind = data.get("type")
+            spec = CITY_OBJECT_DEFS.get(kind)
+            if spec is None or kind in ("power", "water"):
+                continue
+            level = max(1, int(data.get("level", 1)))
+            buildings.append((
+                str(kind), self.footprint_for(str(kind), *anchor),
+                int(spec.get("power_use", 2)) * level,
+                int(spec.get("water_use", 2)) * level,
+            ))
+        return buildings
+
+    @staticmethod
+    def footprint_distance(first: Set[Tuple[int, int]], second: Set[Tuple[int, int]]) -> int:
+        if not first or not second:
+            return 10 ** 6
+        return min(abs(ax - bx) + abs(ay - by)
+                   for ax, ay in first for bx, by in second)
+
+    def calculate_city_metrics(self) -> Dict[str, int]:
+        """Calculate housing, jobs, utility coverage, environment and traffic."""
+        housing = sum(4 + 2 * (self.house_levels.get(pos, 1) - 1) for pos in self.houses)
+        job_capacity = self.available_city_jobs()
+        job_demand = math.ceil(self.population * 0.60)
+        power_sources = []
+        water_sources = []
+        power_capacity = 0
+        water_capacity = 0
+        parks = 0
+        industry_count = 0
+        pollution = 0
+        for anchor, data in self.city_objects.items():
+            kind = data.get("type")
+            spec = CITY_OBJECT_DEFS.get(kind)
+            if spec is None:
+                continue
+            level = max(1, int(data.get("level", 1)))
+            footprint = self.footprint_for(str(kind), *anchor)
+            if kind == "power":
+                power_capacity += int(spec.get("power_output", 0)) * level
+                power_sources.append((footprint, int(spec.get("service_range", 9))))
+            elif kind == "water":
+                water_capacity += int(spec.get("water_output", 0)) * level
+                water_sources.append((footprint, int(spec.get("service_range", 9))))
+            elif kind == "park":
+                parks += 1
+            elif kind == "industrial":
+                industry_count += 1
+            pollution += int(spec.get("pollution", 0)) * level
+
+        buildings = self.city_building_footprints()
+        resident_demand = math.ceil(self.population / 3)
+        power_demand = resident_demand + sum(item[2] for item in buildings)
+        water_demand = resident_demand + sum(item[3] for item in buildings)
+        covered_power = 0
+        covered_water = 0
+        for _kind, footprint, power_use, water_use in buildings:
+            if any(self.footprint_distance(footprint, source) <= radius
+                   for source, radius in power_sources):
+                covered_power += power_use
+            if any(self.footprint_distance(footprint, source) <= radius
+                   for source, radius in water_sources):
+                covered_water += water_use
+
+        power_supply = 100 if power_demand == 0 else min(100, power_capacity * 100 // power_demand)
+        water_supply = 100 if water_demand == 0 else min(100, water_capacity * 100 // water_demand)
+        building_power_demand = max(1, power_demand - resident_demand)
+        building_water_demand = max(1, water_demand - resident_demand)
+        power_range = 100 if power_demand == 0 else min(100, covered_power * 100 // building_power_demand)
+        water_range = 100 if water_demand == 0 else min(100, covered_water * 100 // building_water_demand)
+        power_ratio = min(power_supply, power_range)
+        water_ratio = min(water_supply, water_range)
+
+        sx, sy = MAP_W // 2, MAP_H // 2
+        nearby_trees = sum(1 for x, y in self.trees if abs(x - sx) + abs(y - sy) <= 12)
+        environment = int(clamp(
+            55 + min(nearby_trees, 24) * 1.5 + parks * 8
+            - industry_count * 9 - pollution * 0.35, 0, 100
+        ))
+        road_capacity = len(self.roads) * 3
+        traffic_demand = self.population + job_demand
+        congestion = 0 if traffic_demand == 0 else (
+            100 if road_capacity == 0 else int(clamp(traffic_demand * 100 / road_capacity, 0, 100))
+        )
+        housing_ratio = 100 if self.population == 0 else min(100, housing * 100 // max(1, self.population))
+        employment_ratio = 100 if job_demand == 0 else min(100, job_capacity * 100 // job_demand)
+        park_access = min(100, parks * 30)
+        happiness = round(
+            housing_ratio * 0.20 + employment_ratio * 0.14
+            + power_ratio * 0.18 + water_ratio * 0.18
+            + environment * 0.15 + (100 - congestion) * 0.10
+            + park_access * 0.05
+        )
+        return {
+            "housing": housing, "jobs": job_capacity, "job_demand": job_demand,
+            "power": power_capacity, "power_demand": power_demand, "power_ratio": power_ratio,
+            "water": water_capacity, "water_demand": water_demand, "water_ratio": water_ratio,
+            "environment": environment, "congestion": congestion,
+            "happiness": int(clamp(happiness, 0, 100)),
+        }
+
+    def update_city_population(self) -> int:
+        """Move residents in/out once per day based on housing and city services."""
+        metrics = self.calculate_city_metrics()
+        vacant_homes = max(0, metrics["housing"] - self.population)
+        job_vacancies = max(0, metrics["jobs"] - metrics["job_demand"])
+        change = 0
+        if metrics["happiness"] >= 62 and vacant_homes > 0 and job_vacancies > 0:
+            change = min(2, vacant_homes, max(1, job_vacancies))
+        elif metrics["happiness"] < 28 and self.population > 0:
+            change = -1
+        if change:
+            self.population = max(0, self.population + change)
+        return change
+
+    def update_citizen_traffic(self, dt: float) -> None:
+        """Move a representative group of residents along road tiles."""
+        roads = sorted(self.roads)
+        if not roads or self.population <= 0:
+            self.citizens = []
+            return
+        desired = min(12, self.population // 3)
+        while len(self.citizens) < desired:
+            position = roads[self.citizen_rng.randrange(len(roads))]
+            self.citizens.append({
+                "from": position, "to": position, "previous": None, "elapsed": 0.0
+            })
+        self.citizens = self.citizens[:desired]
+        for citizen in self.citizens:
+            current = citizen["to"]
+            if current not in self.roads:
+                current = roads[self.citizen_rng.randrange(len(roads))]
+                citizen.update({"from": current, "to": current, "previous": None, "elapsed": 0.0})
+            citizen["elapsed"] = float(citizen.get("elapsed", 0.0)) + max(0.0, dt)
+            while citizen["elapsed"] >= 1.25:
+                current = citizen["to"]
+                neighbors = [
+                    (current[0] + dx, current[1] + dy)
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                    if (current[0] + dx, current[1] + dy) in self.roads
+                ]
+                previous = citizen.get("previous")
+                choices = [pos for pos in neighbors if pos != previous] or neighbors
+                if not choices:
+                    citizen.update({"from": current, "to": current, "previous": None, "elapsed": 0.0})
+                    break
+                next_tile = choices[self.citizen_rng.randrange(len(choices))]
+                citizen["from"] = current
+                citizen["to"] = next_tile
+                citizen["previous"] = current
+                citizen["elapsed"] = float(citizen["elapsed"]) - 1.25
+
+    def draw_citizen_traffic(self) -> None:
+        """Render small pedestrian markers moving along roads."""
+        for index, citizen in enumerate(self.citizens):
+            start, end = citizen["from"], citizen["to"]
+            progress = clamp(float(citizen.get("elapsed", 0.0)) / 1.25, 0.0, 1.0)
+            sx, sy = self.tile_to_screen(*start)
+            ex, ey = self.tile_to_screen(*end)
+            cx = sx + (ex - sx) * progress
+            cy = sy + (ey - sy) * progress
+            pygame.draw.ellipse(
+                self.canvas, (35, 43, 40),
+                pygame.Rect(round(cx-3*self.zoom), round(cy+1*self.zoom),
+                            max(4, round(6*self.zoom)), max(2, round(3*self.zoom)))
+            )
+            shirt = ((219, 185, 119), (115, 174, 181), (185, 139, 151))[index % 3]
+            pygame.draw.rect(
+                self.canvas, shirt,
+                (round(cx-2*self.zoom), round(cy-5*self.zoom),
+                 max(3, round(4*self.zoom)), max(5, round(6*self.zoom)))
+            )
+            pygame.draw.circle(
+                self.canvas, (232, 194, 151),
+                (round(cx), round(cy-6*self.zoom)), max(2, round(2*self.zoom))
+            )
+
+    def draw_city_metrics_panel(self) -> None:
+        metrics = self.calculate_city_metrics()
+        panel = pygame.Rect(422, 36, 209, 48)
+        pygame.draw.rect(self.canvas, (28, 39, 43), panel)
+        pygame.draw.rect(self.canvas, (89, 106, 100), panel, 1)
+        happiness_color = C["green"] if metrics["happiness"] >= 65 else (
+            C["gold"] if metrics["happiness"] >= 40 else C["red"]
+        )
+        self.text(self.canvas, f"행복 {metrics['happiness']}%", 430, 41, 9, happiness_color)
+        self.text(self.canvas, f"전력 {metrics['power_ratio']}%  물 {metrics['water_ratio']}%", 430, 56, 8, C["text"])
+        self.text(self.canvas, f"환경 {metrics['environment']}  교통혼잡 {metrics['congestion']}%", 430, 69, 8, C["muted"])
+
+    def draw_lighting_overlay(self) -> None:
+        """Tint the world view based on the in-game clock."""
+        hour = self.game_minutes / 60.0
+        tint = None
+        if hour >= 21 or hour < 5:
+            tint = (22, 34, 66, 112)
+        elif hour >= 18:
+            tint = (104, 70, 45, round((hour - 18) / 3 * 66))
+        elif hour < 7:
+            tint = (92, 74, 60, round((7 - hour) / 2 * 52))
+        if tint is None:
+            return
+        overlay = pygame.Surface((LOGICAL_W, VIEW_RECT.height), pygame.SRCALPHA)
+        overlay.fill(tint)
+        self.canvas.blit(overlay, (0, TOP_H))
+
     def update(self, dt: float) -> None:
         if self.save_dialog_mode is not None or self.settings_open or self.help_open:
             return
