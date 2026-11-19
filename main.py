@@ -3829,8 +3829,7 @@ class CityGame:
 
         if not self.underground_view:
             # Tile cursor / placement preview.
-            mouse = pygame.mouse.get_pos()
-            mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+            mx, my = self.logical_mouse(pygame.mouse.get_pos())
             if VIEW_RECT.collidepoint(mx, my):
                 tile = self.screen_to_tile(mx, my)
                 if tile:
