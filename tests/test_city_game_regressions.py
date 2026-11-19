@@ -155,5 +155,23 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertEqual(self.game.update_city_population(), 0)
         self.assertEqual(self.game.population, 4)
 
+    def test_mouse_coordinates_follow_display_scale(self):
+        original_size = self.game.window.get_size()
+        try:
+            self.game.window = main.pygame.display.set_mode((main.LOGICAL_W * 3, main.LOGICAL_H * 3))
+            self.assertEqual(self.game.logical_mouse((300, 150)), (100, 50))
+        finally:
+            self.game.window = main.pygame.display.set_mode(original_size)
+
+    def test_night_lighting_renders_with_street_lamps(self):
+        self.game.canvas.fill((200, 200, 200))
+        self.game.game_minutes = 22 * 60
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        self.game.city_objects = {(sx, sy): {"type": "lamp", "level": 1}}
+        before = self.game.canvas.get_at((320, 180))
+        self.game.draw_time_of_day()
+        after = self.game.canvas.get_at((320, 180))
+        self.assertNotEqual(before, after)
+
 if __name__ == "__main__":
     unittest.main()
