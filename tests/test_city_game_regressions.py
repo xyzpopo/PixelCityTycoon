@@ -184,9 +184,7 @@ class CityGameRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             save_dir = Path(temporary)
             legacy_file = save_dir / "city_save.json"
-            with patch.object(main, "IS_WEB", False), \\
-                 patch.object(main, "SAVE_DIR", save_dir), \\
-                 patch.object(main, "SAVE_FILE", legacy_file):
+            with patch.object(main, "IS_WEB", False), patch.object(main, "SAVE_DIR", save_dir), patch.object(main, "SAVE_FILE", legacy_file):
                 self.game.money = 87654
                 self.game.save_game(1)
                 serialized = (save_dir / "city_slot_1.json").read_text(encoding="utf-8")
