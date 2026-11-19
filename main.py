@@ -67,6 +67,8 @@ MINE_STONE_COST = 3
 MINE_LAYER_DURATION_MINUTES = 6 * 60
 MINE_STONE_PER_LAYER = 8
 TERRAIN_RESTORE_STONE_COST = 2
+RESTORE_TREE_MONEY_COST = 100
+RESTORE_ROCK_MONEY_COST = 200
 ELEVATION_STEP = 8
 CAMERA_SPEED = 210.0
 DAILY_INCOME_PER_RESIDENT = 25
@@ -119,6 +121,8 @@ REMOVE_MODE_LABELS = {
     "dig": "산 굴착",
     "demolish": "인공 철거",
 }
+RESTORE_MODE_OPTIONS = (("terrain", "지형"), ("tree", "나무"), ("rock", "바위"))
+RESTORE_MODE_LABELS = {"terrain": "지형 복원", "tree": "나무 복원", "rock": "바위 복원"}
 REMOVE_MODE_HINTS = {
     "clear": "나무·바위를 제거해 목재·석재를 얻습니다.",
     "dig": "산 타일을 한 층 낮춰 석재를 얻습니다.",
@@ -129,7 +133,7 @@ TOOL_HINTS = {
     "remove": "제거: 자연·굴착·인공 중 대상을 선택 · [ ] 또는 하단 버튼으로 변경",
     "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
     "house": "건설: 빈 땅 클릭 → 건물 선택 · [ ] 종류 변경 · G 업그레이드",
-    "restore": "지형 복원: 빈 땅을 한 층 높임 · 석재 2",
+    "restore": "복원: 지형·나무·바위를 선택해 되돌립니다 · [ ]로 변경",
 }
 
 CITY_OBJECT_DEFS = {
@@ -294,6 +298,7 @@ class CityGame:
         self.camera_y = 0.0
         self.tool = "move"
         self.remove_mode = "clear"
+        self.restore_mode = "terrain"
         self.worker_x = MAP_W // 2
         self.worker_y = MAP_H // 2
         self.worker_facing = (1, 0)
@@ -389,7 +394,18 @@ class CityGame:
 
     def active_action_tool(self) -> str:
         """Resolve the selected sub-action inside a consolidated parent mode."""
-        return self.remove_mode if self.tool == "remove" else self.tool
+        if self.tool == "remove":
+            return self.remove_mode
+        if self.tool == "restore":
+            return {"terrain": "restore", "tree": "restore_tree", "rock": "restore_rock"}.get(self.restore_mode, "restore")
+        return self.tool
+
+    def cycle_restore_mode(self, direction: int) -> None:
+        modes = [mode for mode, _label in RESTORE_MODE_OPTIONS]
+        current = modes.index(self.restore_mode)
+        self.restore_mode = modes[(current + direction) % len(modes)]
+        if self.tool == "restore":
+            self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
 
     def set_remove_mode(self, mode: str) -> None:
         if mode not in REMOVE_MODE_LABELS:
@@ -969,7 +985,7 @@ class CityGame:
             if not (0 <= tx < MAP_W and 0 <= ty < MAP_H) or not self.is_unlocked(tx, ty):
                 return False
             tile = self.terrain[tx][ty]
-            if tile.terrain != "grass":
+            if tile.terrain not in ("grass", "mountain"):
                 return False
             heights.add(tile.height)
             if ((tx, ty) in self.trees or (tx, ty) in self.rocks
@@ -978,9 +994,8 @@ class CityGame:
                 return False
             if (tx, ty) == (self.worker_x, self.worker_y) and not allow_worker:
                 return False
-        # Large buildings need a level foundation.
-        if len(heights) > 1:
-            return False
+        # Multi-tile buildings may span elevation layers; each occupied tile
+        # keeps its own height and is still checked for blockers.
 
         # Prevent two planned structures from reserving overlapping ground.
         for queued_tool, qx, qy in self.work_queue:
@@ -1182,7 +1197,7 @@ class CityGame:
     def can_build_on(self, x: int, y: int, allow_worker: bool = False) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
-        if self.terrain[x][y].terrain != "grass":
+        if self.terrain[x][y].terrain not in ("grass", "mountain"):
             return False
         if (x, y) in self.trees or (x, y) in self.rocks:
             return False
@@ -1285,6 +1300,10 @@ class CityGame:
             return spec["money"], spec["wood"], spec["stone"]
         if tool == "restore":
             return 0, 0, TERRAIN_RESTORE_STONE_COST
+        if tool == "restore_tree":
+            return RESTORE_TREE_MONEY_COST, 0, 0
+        if tool == "restore_rock":
+            return RESTORE_ROCK_MONEY_COST, 0, 0
         return 0, 0, 0
 
     def reserved_build_cost(self) -> int:
