@@ -208,5 +208,50 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertEqual(self.game.zoom_index, min(original_zoom + 1, len(main.ZOOM_LEVELS) - 1))
         self.assertNotEqual((self.game.camera_x, self.game.camera_y), original_camera)
 
+
+    def test_generated_maps_remain_in_bounds_across_many_seeds(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        for seed in range(100):
+            self.game.generate_world(seed * 7919)
+            self.assertEqual(len(self.game.terrain), main.MAP_W)
+            self.assertTrue(all(len(column) == main.MAP_H for column in self.game.terrain))
+            for column in self.game.terrain:
+                for tile in column:
+                    self.assertIn(tile.terrain, ("grass", "mountain", "water"))
+                    self.assertGreaterEqual(tile.height, 0)
+                    self.assertLessEqual(tile.height, 4)
+            for pos in self.game.trees | self.game.rocks:
+                self.assertNotEqual(self.game.terrain[pos[0]][pos[1]].terrain, "water")
+            self.assertIn((sx, sy + 5), self.game.rocks)
+            self.assertIn((sx, sy - 5), self.game.rocks)
+
+    def test_legacy_save_versions_load_with_safe_defaults(self):
+        for version in (1, 5, 12, 13):
+            with self.subTest(version=version):
+                payload = {"version": version, "seed": 24680, "money": 1234}
+                self.game.sandbox_mode = True
+                self.game.sound_enabled = False
+                self.game.load_game(save_text_override=__import__("json").dumps(payload))
+                self.assertTrue(self.game.last_load_success)
+                self.assertEqual(self.game.money, 1234)
+                self.assertFalse(self.game.sandbox_mode)
+                self.assertTrue(self.game.sound_enabled)
+                self.assertEqual(self.game.window_scale, 2)
+
+    def test_newer_save_version_is_rejected_without_losing_city(self):
+        self.game.money = 76543
+        self.game.load_game(save_text_override='{"version": 999, "seed": 1}')
+        self.assertFalse(self.game.last_load_success)
+        self.assertEqual(self.game.money, 76543)
+
+    def test_long_simulation_and_full_frame_render_smoke(self):
+        self.game.population = 4
+        self.game.houses = {(main.MAP_W // 2, main.MAP_H // 2)}
+        for _ in range(600):
+            self.game.update(0.25)
+        self.assertGreaterEqual(self.game.day, 1)
+        self.assertTrue(all(map(lambda value: isinstance(value, (int, float)),
+                                (self.game.money, self.game.game_minutes, self.game.population))))
+        self.game.draw()
 if __name__ == "__main__":
     unittest.main()
