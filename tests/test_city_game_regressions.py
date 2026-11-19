@@ -126,5 +126,34 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertTrue(self.game.can_reserve_work_order("restore_tree", *tree_pos)[0])
         self.assertTrue(self.game.can_reserve_work_order("restore_rock", *rock_pos)[0])
 
+    def test_city_utility_coverage_and_population_growth(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        house = (sx, sy)
+        self.game.houses = {house}
+        self.game.house_levels = {house: 2}
+        self.game.population = 4
+        self.game.city_objects = {
+            (sx + 1, sy): {"type": "power", "level": 1},
+            (sx, sy + 1): {"type": "water", "level": 1},
+            (sx + 2, sy): {"type": "commercial", "level": 1},
+        }
+        status = self.game.calculate_city_service_status()
+        self.assertEqual(status["power_coverage"], 1.0)
+        self.assertEqual(status["water_coverage"], 1.0)
+        self.assertGreaterEqual(status["power_output"], status["power_demand"])
+        self.assertGreaterEqual(status["water_output"], status["water_demand"])
+        self.assertEqual(self.game.update_city_population(), 2)
+        self.assertEqual(self.game.population, 6)
+
+    def test_unserved_city_does_not_grow(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        house = (sx, sy)
+        self.game.houses = {house}
+        self.game.house_levels = {house: 2}
+        self.game.population = 4
+        self.game.city_objects = {(sx + 2, sy): {"type": "commercial", "level": 1}}
+        self.assertEqual(self.game.update_city_population(), 0)
+        self.assertEqual(self.game.population, 4)
+
 if __name__ == "__main__":
     unittest.main()
