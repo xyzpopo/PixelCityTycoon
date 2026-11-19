@@ -1981,14 +1981,14 @@ class CityGame:
             path = SAVE_FILE
         return path.read_text(encoding="utf-8")
 
-    def save_slot_info(self, slot: int) -> Tuple[bool, str]:
+    def save_slot_info(self, slot: int, autosave: bool = False) -> Tuple[bool, str]:
         try:
-            data = json.loads(self.read_save_text(slot))
+            data = json.loads(self.read_save_text(slot, autosave))
             if not isinstance(data, dict) or type(data.get("seed")) is not int:
                 return True, "손상된 저장 데이터"
             return True, f"DAY {data.get('day', '?')} · {data.get('saved_at', '이전 버전 저장')}"
         except FileNotFoundError:
-            return False, "빈 슬롯"
+            return False, "빈 저장 데이터"
         except (OSError, ValueError, TypeError):
             return True, "읽을 수 없는 저장 파일"
 
@@ -2005,12 +2005,12 @@ class CityGame:
         if mode is None:
             return
         if self.save_dialog_confirm:
-            if 190 <= x <= 315 and 238 <= y <= 268:
+            if 190 <= x <= 315 and 280 <= y <= 310:
                 self.save_game(self.save_dialog_selected)
                 self.save_dialog_mode = None
                 self.save_dialog_confirm = False
                 return
-            if 325 <= x <= 450 and 238 <= y <= 268:
+            if 325 <= x <= 450 and 280 <= y <= 310:
                 self.save_dialog_confirm = False
                 return
             return
@@ -2030,7 +2030,11 @@ class CityGame:
                     self.save_game(slot)
                     self.save_dialog_mode = None
                 return
-        if 325 <= x <= 450 and 238 <= y <= 268:
+        if mode == "load" and 160 <= x <= 480 and 226 <= y <= 256:
+            self.load_game(autosave=True)
+            self.save_dialog_mode = None
+            return
+        if 325 <= x <= 450 and 280 <= y <= 310:
             self.save_dialog_mode = None
             self.save_dialog_confirm = False
 
@@ -3981,7 +3985,7 @@ class CityGame:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 190))
         self.canvas.blit(shade, (0, 0))
-        panel = pygame.Rect(142, 76, 356, 208)
+        panel = pygame.Rect(142, 76, 356, 250)
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
         title = "저장 슬롯 선택" if self.save_dialog_mode == "save" else "불러올 슬롯 선택"
@@ -3996,15 +4000,25 @@ class CityGame:
             self.text(self.canvas, f"슬롯 {slot}", rect.x + 10, rect.y + 5, 10, C["white"])
             color = C["muted"] if exists else (130, 145, 137)
             self.text(self.canvas, description, rect.x + 82, rect.y + 6, 8, color)
+        if self.save_dialog_mode == "load":
+            exists, description = self.save_slot_info(1, autosave=True)
+            auto_rect = pygame.Rect(160, 226, 320, 30)
+            pygame.draw.rect(self.canvas, C["panel2"], auto_rect)
+            pygame.draw.rect(self.canvas, (88, 104, 103), auto_rect, 1)
+            self.text(self.canvas, "자동 저장", auto_rect.x + 10, auto_rect.y + 5, 10, C["gold"])
+            self.text(
+                self.canvas, description if exists else "아직 자동 저장 데이터가 없어요.",
+                auto_rect.x + 82, auto_rect.y + 6, 8, C["muted"]
+            )
         if self.save_dialog_confirm:
             self.text(
                 self.canvas, f"슬롯 {self.save_dialog_selected}의 저장 데이터를 덮어쓸까요?",
-                panel.centerx, 226, 9, C["white"], center=True
+                panel.centerx, 266, 9, C["white"], center=True
             )
-            self.button(pygame.Rect(190, 238, 125, 30), "덮어쓰기", True, small=True)
-            self.button(pygame.Rect(325, 238, 125, 30), "취소", small=True)
+            self.button(pygame.Rect(190, 280, 125, 30), "덮어쓰기", True, small=True)
+            self.button(pygame.Rect(325, 280, 125, 30), "취소", small=True)
         else:
-            self.button(pygame.Rect(325, 238, 125, 30), "닫기", small=True)
+            self.button(pygame.Rect(325, 280, 125, 30), "닫기", small=True)
 
     def draw_seed_modal(self) -> None:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
