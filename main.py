@@ -4146,6 +4146,12 @@ class CityGame:
 
     def handle_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
+        if self.settings_open:
+            self.handle_settings_click(pos)
+            return
+        if self.help_open:
+            self.help_open = False
+            return
         if self.save_dialog_mode is not None:
             self.handle_save_dialog_click(pos)
             return
@@ -4351,7 +4357,13 @@ class CityGame:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.save_dialog_mode is not None:
+                if self.settings_open:
+                    if event.key == pygame.K_ESCAPE:
+                        self.settings_open = False
+                elif self.help_open:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_F11):
+                        self.help_open = False
+                elif self.save_dialog_mode is not None:
                     if event.key == pygame.K_ESCAPE:
                         self.save_dialog_mode = None
                         self.save_dialog_confirm = False
@@ -4375,7 +4387,11 @@ class CityGame:
                     elif event.unicode and event.unicode.isprintable() and len(self.seed_text) < 14:
                         self.seed_text += event.unicode
                 else:
-                    if event.key == pygame.K_ESCAPE:
+                    if event.key == pygame.K_F10:
+                        self.settings_open = True
+                    elif event.key == pygame.K_F11:
+                        self.help_open = True
+                    elif event.key == pygame.K_ESCAPE:
                         if self.build_palette_open:
                             self.close_build_palette()
                         else:
@@ -4636,7 +4652,7 @@ class CityGame:
         return jobs
 
     def update(self, dt: float) -> None:
-        if self.save_dialog_mode is not None:
+        if self.save_dialog_mode is not None or self.settings_open or self.help_open:
             return
         self.update_worker(dt)
         if not self.modal_seed:
