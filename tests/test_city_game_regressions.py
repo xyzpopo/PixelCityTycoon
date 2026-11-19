@@ -270,5 +270,13 @@ class CityGameRegressionTests(unittest.TestCase):
         self.game.rebind_action = "road"
         self.assertFalse(self.game.assign_rebound_key(main.pygame.K_ESCAPE))
         self.assertEqual(self.game.rebind_action, "road")
+
+    def test_enlarged_toolbar_targets_select_modes(self):
+        self.game.handle_click((205, 305))
+        self.assertEqual(self.game.tool, "restore")
+        self.game.handle_click((250, 305))
+        self.assertEqual(self.game.restore_mode, "terrain")
+        self.game.handle_click((500, 305))
+        self.assertTrue(self.game.settings_open)
 if __name__ == "__main__":
     unittest.main()
