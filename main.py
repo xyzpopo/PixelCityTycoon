@@ -254,7 +254,7 @@ class CityGame:
         pygame.init()
         self.worker_sounds: Dict[str, pygame.mixer.Sound] = {}
         self.init_worker_sounds()
-        pygame.display.set_caption(APP_NAME + " - Prototype 0.1")
+        pygame.display.set_caption(APP_NAME + " - v0.2")
         self.window = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.canvas = pygame.Surface((LOGICAL_W, LOGICAL_H))
         # Player-authored house sprites (transparent PNGs, one image per level).
