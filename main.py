@@ -4119,14 +4119,14 @@ class CityGame:
         # Compact toolbar: movement, clearing/demolition, construction and terrain tools.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, BOTTOM_Y), (LOGICAL_W, BOTTOM_Y), 1)
-        tool_xs = [4, 50, 96, 142, 188]
+        tool_xs = [4, 52, 100, 148, 196]
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
             self.button(
                 pygame.Rect(tool_xs[i], 294, 43, 23),
                 name, self.tool == key, small=True
             )
         if self.tool == "remove":
-            remove_xs = [234, 280, 326]
+            remove_xs = [248, 296, 344]
             for index, (mode, label) in enumerate(REMOVE_MODE_OPTIONS):
                 self.button(
                     pygame.Rect(remove_xs[index], 294, 43, 23),
@@ -4135,7 +4135,7 @@ class CityGame:
         elif self.tool == "restore":
             for index, (mode, label) in enumerate(RESTORE_MODE_OPTIONS):
                 self.button(
-                    pygame.Rect([234, 280, 326][index], 294, 43, 23),
+                    pygame.Rect([248, 296, 344][index], 294, 43, 23),
                     label, self.restore_mode == mode, small=True
                 )
 
@@ -4597,20 +4597,20 @@ class CityGame:
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
-                tool_xs = [4, 50, 96, 142, 188]
+                tool_xs = [4, 52, 100, 148, 196]
                 for i, tx in enumerate(tool_xs):
-                    if tx <= x <= tx + 43:
+                    if tx <= x <= tx + 46:
                         self.select_tool(TOOL_KEYS[i])
                         return
                 if self.tool == "remove":
-                    remove_xs = [234, 280, 326]
+                    remove_xs = [248, 296, 344]
                     for index, tx in enumerate(remove_xs):
-                        if tx <= x <= tx + 43:
+                        if tx <= x <= tx + 46:
                             self.set_remove_mode(REMOVE_MODE_OPTIONS[index][0])
                             return
                 elif self.tool == "restore":
                     for index, tx in enumerate((234, 280, 326)):
-                        if tx <= x <= tx + 43:
+                        if tx <= x <= tx + 46:
                             self.restore_mode = RESTORE_MODE_OPTIONS[index][0]
                             self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
                             return
