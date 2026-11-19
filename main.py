@@ -111,6 +111,17 @@ TOOL_NAMES = [
     "F1 이동", "F2 제거", "F3 도로", "F4 건설", "F8 복원"
 ]
 TOOL_KEYS = ["move", "remove", "road", "house", "restore"]
+
+KEY_BINDING_ACTIONS = (
+    ("move", "이동"), ("remove", "제거"), ("road", "도로"),
+    ("build", "건설"), ("restore", "복원"), ("save", "저장"),
+    ("load", "불러오기"), ("settings", "설정"), ("help", "도움말"),
+)
+DEFAULT_KEY_BINDINGS = {
+    "move": pygame.K_F1, "remove": pygame.K_F2, "road": pygame.K_F3,
+    "build": pygame.K_F4, "restore": pygame.K_F8, "save": pygame.K_F5,
+    "load": pygame.K_F9, "settings": pygame.K_F10, "help": pygame.K_F11,
+}
 REMOVE_MODE_OPTIONS = (
     ("clear", "자연"),
     ("dig", "굴착"),
@@ -357,6 +368,9 @@ class CityGame:
         self.sound_enabled = True
         self.sound_volume = 0.6
         self.window_scale = 2
+        self.key_bindings = DEFAULT_KEY_BINDINGS.copy()
+        self.key_rebind_index = 0
+        self.rebind_action: Optional[str] = None
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
         self.tutorial_step = 0
@@ -2088,11 +2102,12 @@ class CityGame:
             self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
             return
         data = {
-            "version": 15,
+            "version": 16,
             "sandbox_mode": self.sandbox_mode,
             "sound_enabled": self.sound_enabled,
             "sound_volume": self.sound_volume,
             "window_scale": self.window_scale,
+            "key_bindings": self.key_bindings,
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
@@ -2182,6 +2197,7 @@ class CityGame:
             "tutorial_step", "tutorial_done", "tutorial_removed",
             "tutorial_roads", "tutorial_house_built",
             "sandbox_mode", "sound_enabled", "sound_volume", "window_scale",
+            "key_bindings",
         )
         previous_state = {
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
@@ -2196,7 +2212,7 @@ class CityGame:
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
             saved_version = data.get("version", 1)
-            if type(saved_version) is not int or saved_version > 15:
+            if type(saved_version) is not int or saved_version > 16:
                 raise ValueError("이 저장 파일은 현재 게임 버전보다 새 버전에서 만들어졌어요.")
             saved_seed = data.get("seed")
             if type(saved_seed) is not int:
@@ -2405,6 +2421,18 @@ class CityGame:
             self.sound_volume = float(clamp(saved_volume, 0.0, 1.0)) if isinstance(saved_volume, (int, float)) and not isinstance(saved_volume, bool) else 0.6
             saved_scale = data.get("window_scale", 2)
             self.window_scale = saved_scale if saved_scale in (1, 2, 3) else 2
+            self.key_bindings = DEFAULT_KEY_BINDINGS.copy()
+            saved_bindings = data.get("key_bindings", {})
+            if isinstance(saved_bindings, dict):
+                used_keys = set()
+                for action, _label in KEY_BINDING_ACTIONS:
+                    candidate = saved_bindings.get(action, DEFAULT_KEY_BINDINGS[action])
+                    if (type(candidate) is int and candidate not in (
+                        pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_BACKSPACE,
+                        pygame.K_TAB, pygame.K_SPACE
+                    ) and candidate not in used_keys):
+                        self.key_bindings[action] = candidate
+                        used_keys.add(candidate)
             self.window = pygame.display.set_mode(
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
@@ -4231,6 +4259,28 @@ class CityGame:
         except Exception as exc:
             self.notify(f"JSON 가져오기 실패: {exc}", 4)
 
+    def assign_rebound_key(self, key: int) -> bool:
+        """Assign a key to the selected action, swapping conflicts safely."""
+        action = self.rebind_action
+        if action is None or key in (
+            pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_BACKSPACE,
+            pygame.K_TAB, pygame.K_SPACE
+        ):
+            return False
+        previous = self.key_bindings[action]
+        other = next(
+            (name for name, value in self.key_bindings.items()
+             if name != action and value == key),
+            None
+        )
+        if other is not None:
+            self.key_bindings[other] = previous
+        self.key_bindings[action] = key
+        self.rebind_action = None
+        label = dict(KEY_BINDING_ACTIONS).get(action, action)
+        self.notify(f"{label} 키를 {pygame.key.name(key).upper()}로 변경했어요.", 3)
+        return True
+
     def handle_settings_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
         if 190 <= x <= 450 and 96 <= y <= 128:
@@ -4250,7 +4300,15 @@ class CityGame:
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
             self.notify(f"화면 크기: {self.window_scale}배", 2)
-        elif 325 <= x <= 450 and 274 <= y <= 306:
+        elif 190 <= x <= 315 and 248 <= y <= 280:
+            self.key_rebind_index = (self.key_rebind_index + 1) % len(KEY_BINDING_ACTIONS)
+            action, label = KEY_BINDING_ACTIONS[self.key_rebind_index]
+            self.notify(f"변경 대상: {label} ({pygame.key.name(self.key_bindings[action]).upper()})", 2)
+        elif 316 <= x <= 450 and 248 <= y <= 280:
+            self.rebind_action = KEY_BINDING_ACTIONS[self.key_rebind_index][0]
+            label = KEY_BINDING_ACTIONS[self.key_rebind_index][1]
+            self.notify(f"{label}에 사용할 새 키를 누르세요. ESC는 취소.", 4)
+        elif 325 <= x <= 450 and 288 <= y <= 320:
             self.settings_open = False
 
     def draw_settings_modal(self) -> None:
@@ -4259,24 +4317,30 @@ class CityGame:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 190))
         self.canvas.blit(shade, (0, 0))
-        panel = pygame.Rect(142, 48, 356, 280)
+        panel = pygame.Rect(142, 28, 356, 302)
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
-        self.text(self.canvas, "게임 설정", panel.centerx, 66, 14, C["gold"], center=True)
+        self.text(self.canvas, "게임 설정", panel.centerx, 45, 14, C["gold"], center=True)
         rows = [
-            (96, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
-            (134, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
-            (172, "효과음 음량", f"{round(self.sound_volume * 100)}%"),
-            (210, "화면 크기", f"{self.window_scale}배"),
+            (72, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
+            (108, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
+            (144, "효과음 음량", f"{round(self.sound_volume * 100)}%"),
+            (180, "화면 크기", f"{self.window_scale}배"),
         ]
         for top, label, value in rows:
-            rect = pygame.Rect(190, top, 260, 32)
+            rect = pygame.Rect(190, top, 260, 30)
             pygame.draw.rect(self.canvas, C["panel2"], rect)
             pygame.draw.rect(self.canvas, (104, 122, 112), rect, 1)
-            self.text(self.canvas, label, 202, top + 9, 10, C["text"])
-            self.text(self.canvas, value, 435, top + 9, 10, C["gold"], center=True)
-        self.text(self.canvas, "샌드박스는 자금 부족만 무시하며 목재·석재는 소비합니다.", panel.centerx, 254, 7, C["muted"], center=True)
-        self.button(pygame.Rect(325, 274, 125, 32), "닫기", small=True)
+            self.text(self.canvas, label, 202, top + 8, 10, C["text"])
+            self.text(self.canvas, value, 435, top + 8, 10, C["gold"], center=True)
+        action, action_label = KEY_BINDING_ACTIONS[self.key_rebind_index]
+        current_key = pygame.key.name(self.key_bindings[action]).upper()
+        target_label = f"변경 대상: {action_label} ({current_key})"
+        self.button(pygame.Rect(190, 216, 125, 32), target_label, small=True)
+        self.button(pygame.Rect(320, 216, 130, 32), "키 누르기", self.rebind_action is not None, small=True)
+        instruction = "새 키를 누르세요. ESC 취소." if self.rebind_action else "왼쪽: 항목 선택 · 오른쪽: 키 지정"
+        self.text(self.canvas, instruction, panel.centerx, 263, 7, C["muted"], center=True)
+        self.button(pygame.Rect(325, 288, 125, 32), "닫기", small=True)
 
     def draw_help_modal(self) -> None:
         if not self.help_open:
