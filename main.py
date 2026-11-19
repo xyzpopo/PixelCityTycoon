@@ -134,8 +134,8 @@ REMOVE_MODE_HINTS = {
 TOOL_HINTS = {
     "move": "이동: 빈 땅을 클릭해 작업자를 이동합니다.",
     "remove": "제거: 자연·굴착·인공 중 대상을 선택 · [ ] 또는 하단 버튼으로 변경",
-    "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
-    "house": "건설: 빈 땅 클릭 → 건물 선택 · [ ] 종류 변경 · G 업그레이드",
+    "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · 선택 후 하단 회전 버튼",
+    "house": "건설: 빈 땅 클릭 → 건물 선택 후 작업 예약",
     "restore": "복원: 지형·나무·바위를 선택해 되돌립니다 · [ ]로 변경",
 }
 
@@ -364,8 +364,6 @@ class CityGame:
         self.sound_volume = 0.6
         self.window_scale = 2
         self.key_bindings = DEFAULT_KEY_BINDINGS.copy()
-        self.key_rebind_index = 0
-        self.rebind_action: Optional[str] = None
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
         self.tutorial_step = 0
@@ -2046,6 +2044,8 @@ class CityGame:
     def start_new_game(self) -> None:
         """Generate a fresh city and enter single-player mode."""
         self.generate_world(random.randint(100000, 999999999))
+        self.remove_mode = "clear"
+        self.restore_mode = "terrain"
         self.center_camera()
         self.tutorial_started_at = time.time()
         self.autosave_elapsed = 0.0
@@ -2098,9 +2098,9 @@ class CityGame:
                 self.menu_screen = "main"
         elif self.menu_screen == "multi":
             if pygame.Rect(382, 111, 210, 38).collidepoint(x, y):
-                self.menu_message = "방 만들기는 온라인 멀티플레이 업데이트에서 제공할 예정이에요."
+                self.menu_message = "방 만들기: 온라인 기능 준비 중"
             elif pygame.Rect(382, 158, 210, 38).collidepoint(x, y):
-                self.menu_message = "방 참가는 온라인 멀티플레이 업데이트에서 제공할 예정이에요."
+                self.menu_message = "방 참가: 온라인 기능 준비 중"
             elif pygame.Rect(382, 258, 210, 34).collidepoint(x, y):
                 self.menu_screen, self.menu_message = "main", ""
 
@@ -3963,7 +3963,7 @@ class CityGame:
             self.draw_worker()
             self.text(
                 self.canvas,
-                f"지층 조사 화면 · {self.underground_layer}/3층 · 채굴은 지상의 채굴장이 자동 진행 · U: 지상 복귀 · [ ]: 층 변경",
+                f"지층 조사 화면 · {self.underground_layer}/3층 · 채굴은 지상의 채굴장이 자동 진행 · 하단 [지하] 버튼으로 지상 복귀",
                 12, TOP_H + 5, 9, (224, 218, 187)
             )
             mx, my = self.logical_mouse(pygame.mouse.get_pos())
@@ -4309,28 +4309,6 @@ class CityGame:
                 self.notify(f"JSON 데이터를 슬롯 {slot}에 가져왔어요.", 3.5)
         except Exception as exc:
             self.notify(f"JSON 가져오기 실패: {exc}", 4)
-
-    def assign_rebound_key(self, key: int) -> bool:
-        """Assign a key to the selected action, swapping conflicts safely."""
-        action = self.rebind_action
-        if action is None or key in (
-            pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_BACKSPACE,
-            pygame.K_TAB, pygame.K_SPACE
-        ):
-            return False
-        previous = self.key_bindings[action]
-        other = next(
-            (name for name, value in self.key_bindings.items()
-             if name != action and value == key),
-            None
-        )
-        if other is not None:
-            self.key_bindings[other] = previous
-        self.key_bindings[action] = key
-        self.rebind_action = None
-        label = dict(KEY_BINDING_ACTIONS).get(action, action)
-        self.notify(f"{label} 키를 {pygame.key.name(key).upper()}로 변경했어요.", 3)
-        return True
 
     def handle_settings_click(self, pos: Tuple[int, int]) -> None:
         """Handle settings clicks using the exact rectangles drawn on screen."""
