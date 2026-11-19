@@ -323,6 +323,40 @@ class CityGameRegressionTests(unittest.TestCase):
             self.game.settings_open = original["settings_open"]
             self.game.window = main.pygame.display.set_mode(original["window_size"])
 
+    def test_settings_modal_captures_mouse_and_touch_before_world_input(self):
+        original_sandbox = self.game.sandbox_mode
+        original_sound = self.game.sound_enabled
+        original_settings = self.game.settings_open
+        original_help = self.game.help_open
+        original_dragging = self.game.tool_dragging
+        try:
+            self.game.settings_open = True
+            self.game.help_open = False
+            self.game.tool_dragging = False
+            scale_x = self.game.window.get_width() / main.LOGICAL_W
+            scale_y = self.game.window.get_height() / main.LOGICAL_H
+            main.pygame.event.clear()
+            main.pygame.event.post(main.pygame.event.Event(
+                main.pygame.MOUSEBUTTONDOWN,
+                pos=(round(300 * scale_x), round(78 * scale_y)),
+                button=1,
+            ))
+            self.game.process_events()
+            self.assertNotEqual(self.game.sandbox_mode, original_sandbox)
+            self.assertFalse(self.game.tool_dragging)
+
+            self.game.sound_enabled = True
+            self.game.handle_touch_down((300, 117))
+            self.assertFalse(self.game.sound_enabled)
+            self.assertFalse(self.game.tool_dragging)
+        finally:
+            self.game.sandbox_mode = original_sandbox
+            self.game.sound_enabled = original_sound
+            self.game.settings_open = original_settings
+            self.game.help_open = original_help
+            self.game.tool_dragging = original_dragging
+            main.pygame.event.clear()
+
     def test_f1_selects_move_and_f11_opens_help_with_feedback(self):
         self.game.settings_open = False
         self.game.help_open = False
