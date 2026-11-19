@@ -1114,7 +1114,7 @@ class CityGame:
         found = self.city_object_at(*anchor)
         if found is not None:
             self.selected_structure_anchor = found[0]
-            self.notify("건물을 선택했어요. G 키로 업그레이드할 수 있어요.", 2.2)
+            self.notify("건물을 선택했어요. 하단 [강화] 버튼으로 업그레이드할 수 있어요.", 2.2)
             return
         self.selected_structure_anchor = None
         self.build_palette_anchor = anchor
@@ -4198,6 +4198,12 @@ class CityGame:
                 pygame.Rect(248, 292, 46, 28), "회전",
                 self.selected_road_tile is not None, small=True
             )
+        elif self.tool == "house" and self.selected_structure_anchor is not None:
+            self.button(pygame.Rect(248, 292, 46, 28), "강화", small=True)
+
+        if self.underground_view:
+            self.button(pygame.Rect(296, 292, 46, 28), "층 -", small=True)
+            self.button(pygame.Rect(344, 292, 46, 28), "층 +", small=True)
 
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
@@ -4512,8 +4518,9 @@ class CityGame:
             "마우스 왼쪽 드래그: 여러 타일에 작업 연속 예약",
             "가운데 버튼 드래그: 카메라 이동 · 마우스 휠: 확대/축소",
             "상단 메뉴 버튼 또는 ESC: 자동 저장 후 메인 화면으로 이동",
-            "하단 좌우 회전 버튼: 지도 회전 · 지하 버튼: 지층 조사",
+            "하단 좌우 회전 버튼: 지도 회전 · 지하 버튼: 지층 조사 · 층 +/-: 지층 선택",
             "도로 모드에서 기존 도로 선택 후 하단 회전 버튼으로 방향 변경",
+            "건설 모드에서 기존 건물을 선택한 뒤 하단 [강화] 버튼으로 업그레이드",
             "새 게임·이어하기·설정·도움말은 메인 화면에서 선택합니다.",
             "주택은 도로 옆에 건설해야 합니다. 예약하면 작업자가 이동해 작업합니다.",
             "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
@@ -4741,7 +4748,14 @@ class CityGame:
                     if tx <= x <= tx + 46:
                         self.select_tool(TOOL_KEYS[i])
                         return
-                if self.tool == "remove":
+                if self.underground_view:
+                    if 248 <= x <= 294:
+                        self.underground_layer = max(1, self.underground_layer - 1)
+                        return
+                    if 296 <= x <= 342:
+                        self.underground_layer = min(3, self.underground_layer + 1)
+                        return
+                elif self.tool == "remove":
                     remove_xs = [248, 296, 344]
                     for index, tx in enumerate(remove_xs):
                         if tx <= x <= tx + 46:
@@ -4753,6 +4767,10 @@ class CityGame:
                             self.restore_mode = RESTORE_MODE_OPTIONS[index][0]
                             self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
                             return
+                elif self.tool == "house" and self.selected_structure_anchor is not None and 248 <= x <= 294:
+                    anchor = self.selected_structure_anchor
+                    self.command_adapter.dispatch("upgrade_building", {"x": anchor[0], "y": anchor[1]})
+                    return
                 elif self.tool == "road" and 248 <= x <= 294:
                     if self.selected_road_tile is not None:
                         self.command_adapter.dispatch(
