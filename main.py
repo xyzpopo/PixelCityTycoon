@@ -141,16 +141,19 @@ CITY_OBJECT_DEFS = {
         "label": "상업 건물", "w": 2, "h": 2,
         "money": 8500, "wood": 3, "stone": 2,
         "road": True, "jobs": 8, "income": 120, "maintenance": 20,
+        "power_use": 2, "water_use": 2,
     },
     "industrial": {
         "label": "공업 건물", "w": 3, "h": 2,
         "money": 12000, "wood": 5, "stone": 4,
         "road": True, "jobs": 12, "income": 180, "maintenance": 40,
+        "power_use": 4, "water_use": 3, "pollution": 12,
     },
     "public": {
         "label": "공공시설", "w": 2, "h": 2,
         "money": 9500, "wood": 3, "stone": 4,
         "road": True, "jobs": 4, "income": 0, "maintenance": 45,
+        "power_use": 1, "water_use": 1,
     },
     "park": {
         "label": "공원", "w": 2, "h": 2,
