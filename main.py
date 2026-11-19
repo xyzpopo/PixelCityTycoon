@@ -4157,9 +4157,9 @@ class CityGame:
         pygame.draw.rect(self.canvas, C["panel"], (0, 0, LOGICAL_W, TOP_H))
         pygame.draw.line(self.canvas, (111, 130, 122), (0, TOP_H-1), (LOGICAL_W, TOP_H-1), 1)
         self.text(self.canvas, "PIXEL CITY", 8, 5, 13, C["gold"])
-        self.text(self.canvas, f"₩{self.money:,}", 132, 6, 11, C["white"])
-        self.text(self.canvas, f"인구 {self.population}", 210, 7, 9, C["text"])
-        self.text(self.canvas, f"일자리 {self.available_city_jobs()}", 270, 7, 8, C["muted"])
+        self.text(self.canvas, f"₩{self.money:,}", 112, 6, 11, C["white"])
+        self.text(self.canvas, f"인구 {self.population}", 205, 7, 9, C["text"])
+        self.text(self.canvas, f"일자리 {self.available_city_jobs()}", 258, 7, 8, C["muted"])
         self.text(self.canvas, f"목재 {self.wood}", 326, 7, 9, C["muted"])
         self.text(self.canvas, f"석재 {self.stone}", 378, 7, 9, C["muted"])
         tax_income, business_income, maintenance = self.calculate_daily_city_finances()
@@ -4169,9 +4169,7 @@ class CityGame:
             self.canvas, f"{daily_net:+,}원/일", 430, 7, 8, income_color
         )
         self.text(self.canvas, f"DAY {self.day}", 506, 7, 8, C["muted"])
-        self.button(pygame.Rect(531, 5, 39, 21), "시드", small=True)
-        self.button(pygame.Rect(573, 5, 29, 21), "저장", small=True)
-        self.button(pygame.Rect(605, 5, 31, 21), "불러", small=True)
+        self.button(pygame.Rect(574, 5, 58, 21), "메뉴", small=True)
 
         # Compact toolbar: movement, clearing/demolition, construction and terrain tools.
         pygame.draw.rect(self.canvas, C["panel"], (0, BOTTOM_Y, LOGICAL_W, LOGICAL_H-BOTTOM_Y))
@@ -4195,30 +4193,29 @@ class CityGame:
                     pygame.Rect([248, 296, 344][index], 292, 46, 28),
                     label, self.restore_mode == mode, small=True
                 )
+        elif self.tool == "road":
+            self.button(
+                pygame.Rect(248, 292, 46, 28), "회전",
+                self.selected_road_tile is not None, small=True
+            )
 
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
         self.button(pygame.Rect(396, 292, 78, 28), "땅 확장", small=True)
-        self.button(pygame.Rect(480, 292, 46, 28), "설정", small=True)
-        self.button(pygame.Rect(532, 292, 46, 28), "도움", small=True)
-        self.text(
-            self.canvas, f"{cost_text} · {self.expand_level}/4",
-            417, 326, 9, C["gold"], center=True
-        )
+        self.button(pygame.Rect(480, 292, 35, 28), "↶", small=True)
+        self.button(pygame.Rect(517, 292, 35, 28), "↷", small=True)
+        self.button(pygame.Rect(556, 292, 48, 28), "지하", self.underground_view, small=True)
+        self.text(self.canvas, f"{cost_text} · {self.expand_level}/4", 435, 326, 9, C["gold"], center=True)
         self.text(self.canvas, f"예약 {len(self.work_queue)}", 590, 326, 9, C["gold"], center=True)
-        self.draw_virtual_keys()
         hint = TOOL_HINTS.get(self.tool, "")
         if self.tool == "remove":
-            hint = (
-                f"제거: {REMOVE_MODE_HINTS[self.remove_mode]} "
-                "· [ ] 또는 하단 버튼으로 변경"
-            )
+            hint = f"제거: {REMOVE_MODE_HINTS[self.remove_mode]} · 하단 버튼으로 변경"
         elif self.tool == "road":
-            hint = "도로: 드래그 건설 · 기존 도로 클릭 후 R 회전 · 물 위로 연결하면 다리"
+            hint = "도로: 드래그 건설 · 기존 도로를 선택한 뒤 [회전] 버튼으로 방향 변경"
         elif self.tool == "house":
-            hint = "건설: 빈 땅 클릭 → 건물 선택 → 건물 위에서 마우스를 놓아 예약 · G 업그레이드"
+            hint = "건설: 빈 땅 클릭 → 건물 선택 → 마우스를 놓아 작업 예약"
         elif self.tool == "restore":
-            hint = f"복원: {RESTORE_MODE_LABELS[self.restore_mode]} · [ ] 또는 하단 버튼으로 변경"
+            hint = f"복원: {RESTORE_MODE_LABELS[self.restore_mode]} · 하단 버튼으로 변경"
         self.text(self.canvas, hint, 10, 327, 9, C["text"])
         city_status = self.calculate_city_service_status()
         self.text(
@@ -4241,9 +4238,6 @@ class CityGame:
         if self.modal_seed:
             self.draw_seed_modal()
         self.draw_build_palette()
-        self.draw_save_dialog()
-        self.draw_settings_modal()
-        self.draw_help_modal()
 
     def export_save_json(self, slot: int = 1) -> None:
         """Export an existing manual save slot as a portable JSON file."""
@@ -4362,20 +4356,129 @@ class CityGame:
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
             self.notify(f"화면 크기: {self.window_scale}배", 2)
-        elif pygame.Rect(120, 219, 190, 34).collidepoint(x, y):
-            self.key_rebind_index = (self.key_rebind_index + 1) % len(KEY_BINDING_ACTIONS)
-            action, label = KEY_BINDING_ACTIONS[self.key_rebind_index]
-            self.notify(
-                f"변경 대상: {label} ({pygame.key.name(self.key_bindings[action]).upper()})",
-                2
-            )
-        elif pygame.Rect(318, 219, 202, 34).collidepoint(x, y):
-            self.rebind_action = KEY_BINDING_ACTIONS[self.key_rebind_index][0]
-            label = KEY_BINDING_ACTIONS[self.key_rebind_index][1]
-            self.notify(f"{label}에 사용할 새 키를 누르세요. ESC는 취소.", 4)
         elif pygame.Rect(405, 305, 115, 29).collidepoint(x, y):
             self.settings_open = False
-            self.rebind_action = None
+
+    def draw_menu_button(self, rect: pygame.Rect, label: str) -> None:
+        """Draw a compact pixel-style title-screen button with hover feedback."""
+        mouse = self.logical_mouse(pygame.mouse.get_pos())
+        hovered = rect.collidepoint(mouse)
+        fill = (68, 87, 77) if hovered else (39, 56, 57)
+        edge = C["gold"] if hovered else (91, 119, 105)
+        pygame.draw.rect(self.canvas, (12, 22, 28), rect.move(0, 3))
+        pygame.draw.rect(self.canvas, edge, rect)
+        pygame.draw.rect(self.canvas, fill, rect.inflate(-2, -2))
+        pygame.draw.rect(self.canvas, (19, 34, 39),
+                         (rect.x + 7, rect.y + 7, 3, rect.height - 14))
+        self.text(self.canvas, label, rect.centerx + 3, rect.centery,
+                  11, C["gold"] if hovered else C["text"], center=True)
+
+    def draw_menu_art(self) -> None:
+        """Draw a tiny isometric settlement as original procedural pixel art."""
+        pygame.draw.polygon(self.canvas, (28, 48, 52), [
+            (0, 196), (0, 150), (42, 130), (82, 157), (122, 132),
+            (170, 158), (214, 130), (276, 159), (340, 137), (360, 166), (360, 230)
+        ])
+        pygame.draw.polygon(self.canvas, (34, 61, 59), [
+            (0, 224), (0, 192), (48, 171), (98, 197), (151, 167),
+            (213, 200), (269, 175), (360, 210), (360, 270), (0, 270)
+        ])
+        for gx in range(-5, 6):
+            for gy in range(-4, 5):
+                cx, cy = 176 + (gx - gy) * 15, 215 + (gx + gy) * 7
+                if cx < 18 or cx > 345 or cy < 150 or cy > 320:
+                    continue
+                pts = [(cx, cy - 8), (cx + 16, cy), (cx, cy + 8), (cx - 16, cy)]
+                pygame.draw.polygon(self.canvas, (75, 130, 87) if (gx + gy) % 2 else (65, 118, 83), pts)
+                pygame.draw.lines(self.canvas, (95, 151, 102), True, pts, 1)
+
+        for step in range(-3, 4):
+            cx, cy = 176 + step * 15, 215 + step * 7
+            pts = [(cx, cy - 3), (cx + 7, cy), (cx, cy + 3), (cx - 7, cy)]
+            pygame.draw.polygon(self.canvas, (91, 95, 87), pts)
+            pygame.draw.lines(self.canvas, (145, 143, 119), True, pts, 1)
+
+        def house(gx, gy, wall, roof):
+            cx, cy = 176 + (gx - gy) * 15, 215 + (gx + gy) * 7
+            pygame.draw.ellipse(self.canvas, (25, 48, 41), (cx - 13, cy - 5, 27, 11))
+            pygame.draw.polygon(self.canvas, wall, [
+                (cx - 8, cy - 17), (cx, cy - 12), (cx, cy + 1), (cx - 8, cy - 4)
+            ])
+            darker = tuple(max(0, c - 20) for c in wall)
+            pygame.draw.polygon(self.canvas, darker, [
+                (cx, cy - 12), (cx + 8, cy - 17), (cx + 8, cy - 4), (cx, cy + 1)
+            ])
+            pygame.draw.polygon(self.canvas, roof, [
+                (cx - 11, cy - 17), (cx, cy - 25), (cx + 11, cy - 17), (cx, cy - 10)
+            ])
+            pygame.draw.line(self.canvas, (225, 197, 125), (cx, cy - 9), (cx, cy - 1), 2)
+            pygame.draw.rect(self.canvas, (236, 200, 104), (cx - 6, cy - 12, 3, 3))
+
+        def tree(gx, gy):
+            cx, cy = 176 + (gx - gy) * 15, 215 + (gx + gy) * 7
+            pygame.draw.ellipse(self.canvas, (23, 48, 40), (cx - 9, cy - 4, 19, 8))
+            pygame.draw.rect(self.canvas, (111, 78, 48), (cx - 2, cy - 14, 4, 15))
+            pygame.draw.rect(self.canvas, (34, 91, 56), (cx - 8, cy - 25, 16, 12))
+            pygame.draw.rect(self.canvas, (63, 139, 76), (cx - 5, cy - 29, 10, 8))
+            self.canvas.set_at((cx - 4, cy - 25), (119, 177, 93))
+
+        house(-1, 0, (187, 148, 105), (143, 79, 63))
+        house(2, -1, (175, 164, 124), (105, 94, 72))
+        house(0, 2, (179, 137, 91), (133, 71, 58))
+        for spot in [(-4, 1), (-3, -2), (3, 2), (4, -1), (-1, 4), (2, -3)]:
+            tree(*spot)
+        pygame.draw.line(self.canvas, (46, 104, 132), (26, 255), (106, 306), 4)
+        pygame.draw.line(self.canvas, (82, 157, 174), (30, 254), (106, 301), 1)
+
+    def draw_menu(self) -> None:
+        """Render the main title screen and its navigation submenus."""
+        self.canvas.fill((17, 30, 37))
+        for band in range(0, LOGICAL_H, 24):
+            shade = 18 + (band // 24) * 2
+            pygame.draw.rect(self.canvas, (shade, shade + 15, shade + 19),
+                             (0, band, LOGICAL_W, 24))
+        for i in range(26):
+            self.canvas.fill((75, 112, 105), ((i * 83 + 19) % 350, (i * 47 + 13) % 115, 2, 2))
+        pygame.draw.rect(self.canvas, (43, 69, 65), (18, 18, 326, 324), 1)
+        pygame.draw.rect(self.canvas, (115, 146, 113), (22, 22, 318, 334), 1)
+        self.text(self.canvas, "PIXEL CITY", 37, 43, 27, C["gold"])
+        self.text(self.canvas, "TYCOON", 39, 73, 22, C["white"])
+        pygame.draw.rect(self.canvas, C["gold"], (39, 105, 185, 2))
+        self.text(self.canvas, "BUILD A CITY. MAKE IT YOURS.", 39, 117, 9, (190, 207, 183))
+        self.draw_menu_art()
+        self.text(self.canvas, "A LITTLE WORLD, MADE BY YOU", 39, 326, 8, (145, 170, 157))
+        self.text(self.canvas, "v0.2  ·  ISOMETRIC CITY BUILDER", 39, 339, 7, (110, 139, 132))
+
+        panel = pygame.Rect(366, 28, 246, 310)
+        pygame.draw.rect(self.canvas, (10, 21, 28), panel.move(0, 4))
+        pygame.draw.rect(self.canvas, (71, 99, 87), panel, 1)
+        pygame.draw.rect(self.canvas, (27, 43, 47), panel.inflate(-4, -4))
+        pygame.draw.line(self.canvas, C["gold"], (385, 59), (593, 59), 1)
+        if self.menu_screen == "main":
+            self.text(self.canvas, "메인 메뉴", 489, 45, 13, C["gold"], center=True)
+            for i, label in enumerate(["싱글 플레이", "멀티 플레이", "설정", "도움말", "나가기"]):
+                self.draw_menu_button(pygame.Rect(382, 77 + i * 44, 210, 36), label)
+        elif self.menu_screen == "single":
+            self.text(self.canvas, "싱글 플레이", 489, 45, 13, C["gold"], center=True)
+            self.text(self.canvas, "혼자서 나만의 도시를 만들어 보세요.", 489, 78, 8, C["muted"], center=True)
+            self.draw_menu_button(pygame.Rect(382, 111, 210, 38), "새 게임")
+            self.draw_menu_button(pygame.Rect(382, 158, 210, 38), "이어하기")
+            self.draw_menu_button(pygame.Rect(382, 258, 210, 34), "← 메인 메뉴")
+        else:
+            self.text(self.canvas, "멀티 플레이", 489, 45, 13, C["gold"], center=True)
+            self.text(self.canvas, "친구와 함께 도시를 만드는 모드", 489, 78, 8, C["muted"], center=True)
+            self.draw_menu_button(pygame.Rect(382, 111, 210, 38), "방 만들기")
+            self.draw_menu_button(pygame.Rect(382, 158, 210, 38), "방 참가")
+            self.text(self.canvas, "온라인 서버 연동 준비 중", 489, 220, 9, C["gold"], center=True)
+            self.draw_menu_button(pygame.Rect(382, 258, 210, 34), "← 메인 메뉴")
+        if self.menu_message:
+            self.text(self.canvas, self.menu_message, 489, 310, 7, (230, 196, 125), center=True)
+        if self.settings_open:
+            self.draw_settings_modal()
+        if self.help_open:
+            self.draw_help_modal()
+        if self.save_dialog_mode is not None:
+            self.draw_save_dialog()
 
     def draw_settings_modal(self) -> None:
         if not self.settings_open:
@@ -4402,30 +4505,16 @@ class CityGame:
             self.text(self.canvas, label, 133, top + 11, 10, C["text"])
             self.text(self.canvas, value, 492, top + 11, 10, C["gold"], center=True)
 
-        action, action_label = KEY_BINDING_ACTIONS[self.key_rebind_index]
-        current_key = pygame.key.name(self.key_bindings[action]).upper()
-        self.button(
-            pygame.Rect(120, 219, 190, 34),
-            f"변경 기능: {action_label} ({current_key})",
-            small=False
-        )
-        self.button(
-            pygame.Rect(318, 219, 202, 34),
-            "새 키 입력" if self.rebind_action is not None else "키 지정",
-            self.rebind_action is not None,
-            small=False
+        self.text(
+            self.canvas,
+            "조작 키는 F1 이동 · F2 제거 · F3 도로 · F4 건설 · F5 복원으로 고정됩니다.",
+            panel.centerx, 270, 9, C["muted"], center=True
         )
         self.text(
             self.canvas,
-            "샌드박스는 돈 부족만 무시하고 목재·석재는 그대로 소비합니다.",
-            panel.centerx, 266, 9, C["muted"], center=True
+            "설정은 새 게임과 이어하기에 공통으로 적용됩니다.",
+            panel.centerx, 286, 9, C["text"], center=True
         )
-        instruction = (
-            "새 키를 누르세요. ESC를 누르면 취소됩니다."
-            if self.rebind_action else
-            "기능 선택 → [키 지정] → 사용할 키 누르기"
-        )
-        self.text(self.canvas, instruction, panel.centerx, 282, 9, C["text"], center=True)
         self.button(pygame.Rect(405, 305, 115, 29), "닫기", small=False)
 
     def draw_help_modal(self) -> None:
@@ -4439,22 +4528,19 @@ class CityGame:
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
         self.text(self.canvas, "조작법 / 게임 도움말", panel.centerx, 34, 15, C["gold"], center=True)
 
-        key_name = lambda action: pygame.key.name(self.key_bindings[action]).upper()
         help_lines = [
-            f"{key_name('move')} 이동 · {key_name('remove')} 제거 · {key_name('road')} 도로 · {key_name('build')} 건설 · {key_name('restore')} 복원",
-            "1~5: 모드 선택 · [ / ]: 하위 작업 또는 건물 종류 변경",
-            "마우스 왼쪽 클릭: 선택 및 작업 예약 · 드래그: 연속 예약",
-            "가운데 버튼 드래그 또는 WASD: 카메라 이동 · 휠: 확대/축소",
-            "Q/E: 지도 회전 · C: 작업자 추적 · U: 지층 조사",
-            "도로 모드에서 기존 도로 클릭 후 R: 도로 방향 회전",
-            "건설 모드에서 건물 선택 후 G: 선택한 건물 업그레이드",
-            f"{key_name('save')} 저장 · {key_name('load')} 불러오기 · {key_name('settings')} 설정 · {key_name('help')} 도움말",
+            "F1 이동 · F2 제거 · F3 도로 · F4 건설 · F5 복원",
+            "마우스 왼쪽 클릭: 타일 선택 및 작업 예약",
+            "마우스 왼쪽 드래그: 여러 타일에 작업 연속 예약",
+            "가운데 버튼 드래그: 카메라 이동 · 마우스 휠: 확대/축소",
+            "상단 메뉴 버튼 또는 ESC: 자동 저장 후 메인 화면으로 이동",
+            "하단 좌우 회전 버튼: 지도 회전 · 지하 버튼: 지층 조사",
+            "도로 모드에서 기존 도로 선택 후 하단 회전 버튼으로 방향 변경",
+            "새 게임·이어하기·설정·도움말은 메인 화면에서 선택합니다.",
             "주택은 도로 옆에 건설해야 합니다. 예약하면 작업자가 이동해 작업합니다.",
             "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
             "발전소와 급수탑은 주변 주택에 전력과 물을 공급합니다.",
             "주민 증가는 주택·일자리·전력·물·행복도 상태에 영향을 받습니다.",
-            "설정에서 샌드박스, 효과음, 창 크기와 키 설정을 바꿀 수 있습니다.",
-            "F1은 이동 모드입니다. 도움말은 지정된 도움말 키 또는 아래 버튼을 누르세요.",
         ]
 
         max_width = 430
@@ -4546,43 +4632,8 @@ class CityGame:
         return int(pos[0] / scale_x), int(pos[1] / scale_y)
 
     def virtual_key_buttons(self) -> List[Tuple[pygame.Rect, int, str]]:
-        """Return context-sensitive on-screen keycaps after touch input is detected."""
-        if not self.touch_input_active or self.modal_seed:
-            return []
-
-        keys: List[Tuple[str, int]] = [("Q", pygame.K_q), ("E", pygame.K_e)]
-        road_selected = (
-            self.tool == "road"
-            and self.selected_road_tile is not None
-            and self.selected_road_tile in self.roads
-        )
-        upgrade_available = False
-        if self.tool == "house" and self.selected_structure_anchor is not None:
-            found = self.city_object_at(*self.selected_structure_anchor)
-            upgrade_available = bool(
-                found is not None
-                and found[1] in UPGRADABLE_OBJECTS
-                and found[2] < 3
-            )
-
-        if road_selected:
-            keys.extend([("C", pygame.K_c), ("U", pygame.K_u), ("R", pygame.K_r)])
-        elif upgrade_available:
-            keys.extend([("C", pygame.K_c), ("U", pygame.K_u), ("G", pygame.K_g)])
-        elif self.tool in ("remove", "house", "restore") or self.underground_view:
-            keys.extend([
-                ("[", pygame.K_LEFTBRACKET), ("]", pygame.K_RIGHTBRACKET),
-                ("C", pygame.K_c), ("U", pygame.K_u)
-            ])
-        else:
-            keys.extend([("C", pygame.K_c), ("U", pygame.K_u)])
-
-        width, height, gap = 25, 23, 2
-        start_x = LOGICAL_W - 8 - len(keys) * width - (len(keys) - 1) * gap
-        return [
-            (pygame.Rect(start_x + index * (width + gap), 294, width, height), key, label)
-            for index, (label, key) in enumerate(keys)
-        ]
+        """F1-F5 are printed on the toolbar; no other shortcut keycaps are shown."""
+        return []
 
     def draw_virtual_keys(self) -> None:
         """Draw small keycaps for the shortcuts currently useful on a touch device."""
@@ -4702,13 +4753,8 @@ class CityGame:
             self.queue_virtual_key(virtual_key)
             return
         if y <= TOP_H:
-            if 531 <= x <= 570 and 4 <= y <= 27:
-                self.modal_seed = True
-                self.seed_text = ""
-            elif 573 <= x <= 602 and 4 <= y <= 27:
-                self.open_save_dialog("save")
-            elif 605 <= x <= 638 and 4 <= y <= 27:
-                self.open_save_dialog("load")
+            if pygame.Rect(574, 5, 58, 21).collidepoint(x, y):
+                self.return_to_main_menu()
             return
         if y >= BOTTOM_Y:
             if 292 <= y <= 322:
@@ -4729,14 +4775,27 @@ class CityGame:
                             self.restore_mode = RESTORE_MODE_OPTIONS[index][0]
                             self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
                             return
+                elif self.tool == "road" and 248 <= x <= 294:
+                    if self.selected_road_tile is not None:
+                        self.command_adapter.dispatch(
+                            "rotate_road",
+                            {"x": self.selected_road_tile[0], "y": self.selected_road_tile[1]}
+                        )
+                    else:
+                        self.notify("방향을 바꿀 기존 도로를 먼저 선택하세요.", 2.2)
+                    return
             if 396 <= x <= 474 and 292 <= y <= 322:
                 self.command_adapter.dispatch("expand_land", {})
                 return
-            if 480 <= x <= 526 and 292 <= y <= 322:
-                self.settings_open = True
+            if 480 <= x <= 515 and 292 <= y <= 322:
+                self.rotate_map(-1)
                 return
-            if 532 <= x <= 578 and 292 <= y <= 322:
-                self.help_open = True
+            if 517 <= x <= 552 and 292 <= y <= 322:
+                self.rotate_map(1)
+                return
+            if 556 <= x <= 604 and 292 <= y <= 322:
+                self.underground_view = not self.underground_view
+                self.notify("지층 조사 화면" if self.underground_view else "지상 보기", 1.8)
                 return
             return
         if VIEW_RECT.collidepoint(x, y):
@@ -4757,7 +4816,7 @@ class CityGame:
             return
         if self.tool == "road" and (x, y) in self.roads:
             self.selected_road_tile = (x, y)
-            self.notify("도로 타일을 선택했어요. R 키로 중앙선 방향을 90도 회전해요.", 2.5)
+            self.notify("도로 타일을 선택했어요. 하단 [회전] 버튼으로 중앙선 방향을 바꿔요.", 2.5)
             return
         if self.selected_road_tile != (x, y):
             self.selected_road_tile = None
@@ -4865,7 +4924,7 @@ class CityGame:
     def toggle_road_direction(self) -> None:
         """Rotate a selected, already-installed road tile while in road mode."""
         if self.tool != "road":
-            self.notify("F3 도로 모드에서 기존 도로를 선택한 뒤 R을 누르세요.", 2.3)
+            self.notify("F3 도로 모드에서 기존 도로를 선택한 뒤 하단 [회전] 버튼을 누르세요.", 2.3)
             return
         tile = self.selected_road_tile
         if tile is None or tile not in self.roads:
@@ -5487,19 +5546,6 @@ class CityGame:
         if not self.in_game or self.save_dialog_mode is not None or self.settings_open or self.help_open:
             return
         self.update_worker(dt)
-        if not self.modal_seed:
-            keys = pygame.key.get_pressed()
-            camera_dx = int(keys[pygame.K_d]) - int(keys[pygame.K_a])
-            camera_dy = int(keys[pygame.K_s]) - int(keys[pygame.K_w])
-            if camera_dx or camera_dy:
-                if self.camera_follow_worker:
-                    self.camera_follow_worker = False
-                    self.notify("수동 카메라 이동으로 추적을 껐어요.", 1.8)
-                length = math.hypot(camera_dx, camera_dy)
-                self.camera_x -= (camera_dx / length) * CAMERA_SPEED * dt
-                self.camera_y -= (camera_dy / length) * CAMERA_SPEED * dt
-            elif self.camera_follow_worker:
-                self.center_camera_on_worker()
         self.autosave_elapsed += max(0.0, dt)
         if self.autosave_elapsed >= 180.0:
             self.save_game(autosave=True)
