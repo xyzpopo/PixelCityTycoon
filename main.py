@@ -328,6 +328,11 @@ class CityGame:
         self.save_dialog_selected = 1
         self.save_dialog_confirm = False
         self.autosave_elapsed = 0.0
+        self.settings_open = False
+        self.help_open = False
+        self.sandbox_mode = False
+        self.sound_enabled = True
+        self.window_scale = 2
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
         self.tutorial_step = 0
@@ -478,6 +483,8 @@ class CityGame:
         return pygame.mixer.Sound(buffer=samples.tobytes())
 
     def play_worker_action_sound(self, action: str) -> None:
+        if not self.sound_enabled:
+            return
         sound = self.worker_sounds.get(action)
         if sound is not None:
             try:
@@ -1176,7 +1183,7 @@ class CityGame:
         wood_cost = base_wood + level
         stone_cost = base_stone + level
         reserved_wood, reserved_stone = self.reserved_material_costs()
-        if self.money - self.reserved_build_cost() < money_cost:
+        if not self.sandbox_mode and self.money - self.reserved_build_cost() < money_cost:
             self.notify(f"업그레이드 자금이 부족해요. 필요 자금 ₩{money_cost:,}", 2.5)
             return
         if (self.wood - reserved_wood < wood_cost
@@ -1437,7 +1444,7 @@ class CityGame:
         available_stone = self.stone - reserved_stone
         money_cost, wood_cost, stone_cost = self.order_costs(tool, x, y)
 
-        if available_money < money_cost:
+        if not self.sandbox_mode and available_money < money_cost:
             return False, f"건설 자금이 부족해요. 필요 자금: ₩{money_cost:,}"
         if available_wood < wood_cost or available_stone < stone_cost:
             return False, f"필요 재료: 목재 {wood_cost}개 · 석재 {stone_cost}개"
@@ -1692,7 +1699,8 @@ class CityGame:
                 self.notify("예약한 도로 위치를 더 이상 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
                 return False
             money_cost, wood_cost, stone_cost = self.road_build_cost(x, y)
-            if self.money < money_cost or self.wood < wood_cost or self.stone < stone_cost:
+            if ((not self.sandbox_mode and self.money < money_cost)
+                    or self.wood < wood_cost or self.stone < stone_cost):
                 self.notify("도로 또는 다리 건설에 필요한 자원이 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
             self.money -= money_cost
@@ -1719,8 +1727,8 @@ class CityGame:
             if not self.has_adjacent_road(x, y):
                 self.notify("예약한 집 옆에 도로가 없어 건설을 건너뛰었어요.", 2.8)
                 return False
-            if (self.money < HOUSE_MONEY_COST or self.wood < HOUSE_WOOD_COST
-                    or self.stone < HOUSE_STONE_COST):
+            if ((not self.sandbox_mode and self.money < HOUSE_MONEY_COST)
+                    or self.wood < HOUSE_WOOD_COST or self.stone < HOUSE_STONE_COST):
                 self.notify("주택 건설에 필요한 자금 또는 자원이 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
             self.money -= HOUSE_MONEY_COST
@@ -1743,8 +1751,8 @@ class CityGame:
             if not self.can_build_mine_on(x, y):
                 self.notify("채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요.", 2.8)
                 return False
-            if (self.money < MINE_MONEY_COST or self.wood < MINE_WOOD_COST
-                    or self.stone < MINE_STONE_COST):
+            if ((not self.sandbox_mode and self.money < MINE_MONEY_COST)
+                    or self.wood < MINE_WOOD_COST or self.stone < MINE_STONE_COST):
                 self.notify("채굴장 건설에 필요한 자금 또는 자원이 부족해요.", 2.8)
                 return False
             self.money -= MINE_MONEY_COST
@@ -1765,7 +1773,8 @@ class CityGame:
                 self.notify("예약한 건물/시설의 점유 공간을 사용할 수 없어 작업을 건너뛰었어요.", 2.8)
                 return False
             money_cost, wood_cost, stone_cost = self.order_costs(tool, x, y)
-            if self.money < money_cost or self.wood < wood_cost or self.stone < stone_cost:
+            if ((not self.sandbox_mode and self.money < money_cost)
+                    or self.wood < wood_cost or self.stone < stone_cost):
                 self.notify("건설에 필요한 자금 또는 재료가 부족해 예약을 건너뛰었어요.", 2.8)
                 return False
             self.money -= money_cost
@@ -1943,7 +1952,7 @@ class CityGame:
             self.notify("지도 전체를 개척했어요. 더 이상 확장할 땅이 없어요.", 2.8)
             return
         cost = costs[self.expand_level]
-        if self.money - self.reserved_build_cost() < cost:
+        if not self.sandbox_mode and self.money - self.reserved_build_cost() < cost:
             self.notify(f"예약된 건설 비용을 제외하면 확장 자금이 부족해요. 필요 자금: ₩{cost:,}")
             return
         self.money -= cost
@@ -2043,7 +2052,10 @@ class CityGame:
             self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
             return
         data = {
-            "version": 13,
+            "version": 14,
+            "sandbox_mode": self.sandbox_mode,
+            "sound_enabled": self.sound_enabled,
+            "window_scale": self.window_scale,
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
@@ -2129,6 +2141,7 @@ class CityGame:
             "work_path_active", "tool", "remove_mode", "restore_mode", "camera_x", "camera_y",
             "tutorial_step", "tutorial_done", "tutorial_removed",
             "tutorial_roads", "tutorial_house_built",
+            "sandbox_mode", "sound_enabled", "window_scale",
         )
         previous_state = {
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
@@ -2138,7 +2151,7 @@ class CityGame:
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
             saved_version = data.get("version", 1)
-            if type(saved_version) is not int or saved_version > 13:
+            if type(saved_version) is not int or saved_version > 14:
                 raise ValueError("이 저장 파일은 현재 게임 버전보다 새 버전에서 만들어졌어요.")
             saved_seed = data.get("seed")
             if type(saved_seed) is not int:
@@ -2341,6 +2354,13 @@ class CityGame:
             self.tutorial_removed = safe_saved_int(data.get("tutorial_removed", 0), 0, 0, 1000000)
             self.tutorial_roads = safe_saved_int(data.get("tutorial_roads", 0), 0, 0, 1000000)
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
+            self.sandbox_mode = bool(data.get("sandbox_mode", False))
+            self.sound_enabled = bool(data.get("sound_enabled", True))
+            saved_scale = data.get("window_scale", self.window_scale)
+            self.window_scale = saved_scale if saved_scale in (1, 2, 3) else 2
+            self.window = pygame.display.set_mode(
+                (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
+            )
             saved_restore_mode = data.get("restore_mode", "terrain")
             self.restore_mode = saved_restore_mode if saved_restore_mode in ("terrain", "tree", "rock") else "terrain"
             self.center_camera()
@@ -3941,6 +3961,8 @@ class CityGame:
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
         self.button(pygame.Rect(373, 294, 88, 23), "땅 확장", small=True)
+        self.button(pygame.Rect(468, 294, 42, 23), "설정", small=True)
+        self.button(pygame.Rect(515, 294, 42, 23), "도움", small=True)
         self.text(
             self.canvas, f"{cost_text} · {self.expand_level}/4",
             417, 326, 9, C["gold"], center=True
@@ -3978,6 +4000,75 @@ class CityGame:
             self.draw_seed_modal()
         self.draw_build_palette()
         self.draw_save_dialog()
+        self.draw_settings_modal()
+        self.draw_help_modal()
+
+    def handle_settings_click(self, pos: Tuple[int, int]) -> None:
+        x, y = pos
+        if 190 <= x <= 450 and 112 <= y <= 145:
+            self.sandbox_mode = not self.sandbox_mode
+            self.notify("샌드박스 경제 켜짐 · 자금 부족으로 건설이 막히지 않아요." if self.sandbox_mode else "일반 경제 모드로 전환했어요.", 3)
+        elif 190 <= x <= 450 and 154 <= y <= 187:
+            self.sound_enabled = not self.sound_enabled
+            self.notify("효과음 켜짐" if self.sound_enabled else "효과음 꺼짐", 2)
+        elif 190 <= x <= 450 and 196 <= y <= 229:
+            self.window_scale = self.window_scale % 3 + 1
+            self.window = pygame.display.set_mode(
+                (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
+            )
+            self.notify(f"화면 크기: {self.window_scale}배", 2)
+        elif 325 <= x <= 450 and 250 <= y <= 282:
+            self.settings_open = False
+
+    def draw_settings_modal(self) -> None:
+        if not self.settings_open:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 190))
+        self.canvas.blit(shade, (0, 0))
+        panel = pygame.Rect(142, 70, 356, 228)
+        pygame.draw.rect(self.canvas, C["panel"], panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        self.text(self.canvas, "게임 설정", panel.centerx, 91, 14, C["gold"], center=True)
+        rows = [
+            (112, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
+            (154, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
+            (196, "화면 크기", f"{self.window_scale}배"),
+        ]
+        for top, label, value in rows:
+            rect = pygame.Rect(190, top, 260, 34)
+            pygame.draw.rect(self.canvas, C["panel2"], rect)
+            pygame.draw.rect(self.canvas, (104, 122, 112), rect, 1)
+            self.text(self.canvas, label, 202, top + 10, 10, C["text"])
+            self.text(self.canvas, value, 435, top + 10, 10, C["gold"], center=True)
+        self.text(self.canvas, "돈이 부족해도 건설할 수 있지만 목재와 석재는 소비됩니다.", panel.centerx, 240, 7, C["muted"], center=True)
+        self.button(pygame.Rect(325, 250, 125, 32), "닫기", small=True)
+
+    def draw_help_modal(self) -> None:
+        if not self.help_open:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 195))
+        self.canvas.blit(shade, (0, 0))
+        panel = pygame.Rect(82, 35, 476, 290)
+        pygame.draw.rect(self.canvas, C["panel"], panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        self.text(self.canvas, "조작법 / 게임 도움말", panel.centerx, 51, 14, C["gold"], center=True)
+        help_lines = [
+            "F1 이동 · F2 제거 · F3 도로 · F4 건설 · F8 복원",
+            "1~5: 모드 선택 · [ / ]: 하위 작업/건물 종류 변경",
+            "마우스 왼쪽 클릭: 선택 및 예약 · 드래그: 연속 작업 예약",
+            "가운데 버튼 드래그 / WASD: 카메라 이동 · 휠: 확대/축소",
+            "Q/E: 지도 회전 · C: 작업자 추적 · U: 지층 조사",
+            "F3 도로 선택 후 R: 방향 회전 · F4 건물 선택 후 G: 업그레이드",
+            "F5 저장 · F9 불러오기 · F10 설정 · F11 도움말 · ESC 닫기",
+            "주택은 도로 옆에 건설해야 하며, 건설 예약은 자금과 재료를 확보합니다.",
+            "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
+            "저장/불러오기에서 수동 슬롯 3개와 자동 저장본을 관리할 수 있습니다.",
+        ]
+        for index, line in enumerate(help_lines):
+            self.text(self.canvas, line, 105, 77 + index * 20, 8, C["text"])
+        self.button(pygame.Rect(430, 288, 112, 27), "닫기 (ESC)", small=True)
 
     def draw_save_dialog(self) -> None:
         if self.save_dialog_mode is None:
@@ -4191,6 +4282,12 @@ class CityGame:
                             return
             if 373 <= x <= 461 and 294 <= y <= 317:
                 self.expand_land()
+                return
+            if 468 <= x <= 510 and 294 <= y <= 317:
+                self.settings_open = True
+                return
+            if 515 <= x <= 557 and 294 <= y <= 317:
+                self.help_open = True
                 return
             return
         if VIEW_RECT.collidepoint(x, y):
@@ -4722,7 +4819,7 @@ class CityGame:
         self.draw_world()
         self.draw_ui()
         # Pixel-perfect upscale: no smoothing.
-        scaled = pygame.transform.scale(self.canvas, (WINDOW_W, WINDOW_H))
+        scaled = pygame.transform.scale(self.canvas, self.window.get_size())
         self.window.blit(scaled, (0, 0))
         pygame.display.flip()
 
