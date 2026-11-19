@@ -4588,6 +4588,9 @@ class CityGame:
             return
         if self.modal_seed:
             return
+        if self.settings_open or self.help_open:
+            self.handle_click(pos)
+            return
         hit = self.build_palette_hit_test(pos)
         if self.build_palette_open and hit is not None:
             self.build_palette_dragging = True
@@ -5030,6 +5033,10 @@ class CityGame:
                 if self.modal_seed:
                     continue
                 if self.save_dialog_mode is not None:
+                    if event.button == 1:
+                        self.handle_click(logical)
+                    continue
+                if self.settings_open or self.help_open:
                     if event.button == 1:
                         self.handle_click(logical)
                     continue
