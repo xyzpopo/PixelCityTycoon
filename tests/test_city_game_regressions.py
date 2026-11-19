@@ -22,6 +22,13 @@ class CityGameRegressionTests(unittest.TestCase):
 
     def setUp(self):
         self.game.generate_world(12345)
+        self.game.in_game = True
+        self.game.menu_screen = "main"
+        self.game.settings_open = False
+        self.game.help_open = False
+        self.game.save_dialog_mode = None
+        self.game.modal_seed = False
+        self.game.tool_dragging = False
 
     def test_two_starter_rocks_are_guaranteed_and_reachable(self):
         sx, sy = main.MAP_W // 2, main.MAP_H // 2
@@ -98,6 +105,65 @@ class CityGameRegressionTests(unittest.TestCase):
                 self.assertEqual(self.game.money, 54321)
 
 
+    def test_title_menu_navigation_and_single_player_new_game(self):
+        self.game.in_game = False
+        self.game.menu_screen = "main"
+        self.game.settings_open = False
+        self.game.help_open = False
+        self.game.draw()
+        self.game.handle_click((480, 95))
+        self.assertEqual(self.game.menu_screen, "single")
+        self.assertFalse(self.game.in_game)
+        self.game.handle_click((480, 130))
+        self.assertTrue(self.game.in_game)
+        self.assertEqual(self.game.tool, "move")
+        self.assertEqual(self.game.day, 1)
+        self.assertFalse(self.game.tutorial_done)
+
+    def test_multiplayer_menu_is_visible_but_does_not_fake_online_play(self):
+        self.game.in_game = False
+        self.game.menu_screen = "main"
+        self.game.handle_click((480, 139))
+        self.assertEqual(self.game.menu_screen, "multi")
+        self.game.handle_click((480, 130))
+        self.assertFalse(self.game.in_game)
+        self.assertIn("준비 중", self.game.menu_message)
+
+    def test_continue_loads_selected_slot_from_single_player_menu(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            save_dir = Path(temporary)
+            legacy_file = save_dir / "city_save.json"
+            with patch.object(main, "IS_WEB", False), \
+                 patch.object(main, "SAVE_DIR", save_dir), \
+                 patch.object(main, "SAVE_FILE", legacy_file):
+                self.game.money = 24680
+                self.game.save_game(2)
+                self.game.in_game = False
+                self.game.menu_screen = "single"
+                self.game.open_save_dialog("load")
+                self.game.handle_click((200, 120))
+                self.assertTrue(self.game.in_game)
+                self.assertEqual(self.game.money, 24680)
+
+    def test_escape_autosaves_and_returns_to_main_menu(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            save_dir = Path(temporary)
+            legacy_file = save_dir / "city_save.json"
+            with patch.object(main, "IS_WEB", False), \
+                 patch.object(main, "SAVE_DIR", save_dir), \
+                 patch.object(main, "SAVE_FILE", legacy_file):
+                self.game.in_game = True
+                self.game.money = 13579
+                main.pygame.event.clear()
+                main.pygame.event.post(main.pygame.event.Event(
+                    main.pygame.KEYDOWN, key=main.pygame.K_ESCAPE, mod=0, unicode=""
+                ))
+                self.game.process_events()
+                self.assertFalse(self.game.in_game)
+                self.assertEqual(self.game.menu_screen, "main")
+                self.assertTrue((save_dir / "city_autosave.json").exists())
+                main.pygame.event.clear()
+
     def test_settings_round_trip_and_sandbox_restoration(self):
         with tempfile.TemporaryDirectory() as temporary:
             save_dir = Path(temporary)
@@ -121,7 +187,7 @@ class CityGameRegressionTests(unittest.TestCase):
                 self.assertFalse(self.game.sound_enabled)
                 self.assertEqual(self.game.sound_volume, 0.25)
                 self.assertEqual(self.game.window_scale, 3)
-                self.assertEqual(self.game.key_bindings["move"], main.pygame.K_m)
+                self.assertEqual(self.game.key_bindings["move"], main.pygame.K_F1)
                 self.assertEqual(self.game.window.get_size(), (main.LOGICAL_W * 3, main.LOGICAL_H * 3))
 
         self.game.sandbox_mode = True
@@ -260,16 +326,14 @@ class CityGameRegressionTests(unittest.TestCase):
                                 (self.game.money, self.game.game_minutes, self.game.population))))
         self.game.draw()
 
-    def test_key_rebinding_swaps_conflicting_keys(self):
-        self.game.key_bindings = main.DEFAULT_KEY_BINDINGS.copy()
-        self.game.rebind_action = "move"
-        self.assertTrue(self.game.assign_rebound_key(main.pygame.K_F2))
-        self.assertEqual(self.game.key_bindings["move"], main.pygame.K_F2)
-        self.assertEqual(self.game.key_bindings["remove"], main.pygame.K_F1)
-        self.assertIsNone(self.game.rebind_action)
-        self.game.rebind_action = "road"
-        self.assertFalse(self.game.assign_rebound_key(main.pygame.K_ESCAPE))
-        self.assertEqual(self.game.rebind_action, "road")
+    def test_gameplay_shortcuts_are_fixed_to_f1_through_f5(self):
+        self.assertEqual(main.DEFAULT_KEY_BINDINGS, {
+            "move": main.pygame.K_F1,
+            "remove": main.pygame.K_F2,
+            "road": main.pygame.K_F3,
+            "build": main.pygame.K_F4,
+            "restore": main.pygame.K_F5,
+        })
 
     def test_settings_click_targets_match_visible_controls(self):
         original = {
@@ -277,9 +341,6 @@ class CityGameRegressionTests(unittest.TestCase):
             "sound_enabled": self.game.sound_enabled,
             "sound_volume": self.game.sound_volume,
             "window_scale": self.game.window_scale,
-            "key_bindings": self.game.key_bindings.copy(),
-            "key_rebind_index": self.game.key_rebind_index,
-            "rebind_action": self.game.rebind_action,
             "settings_open": self.game.settings_open,
             "window_size": self.game.window.get_size(),
         }
@@ -288,9 +349,6 @@ class CityGameRegressionTests(unittest.TestCase):
             self.game.sound_enabled = True
             self.game.sound_volume = 0.5
             self.game.window_scale = 1
-            self.game.key_bindings = main.DEFAULT_KEY_BINDINGS.copy()
-            self.game.key_rebind_index = 0
-            self.game.rebind_action = None
             self.game.settings_open = True
 
             self.game.handle_settings_click((300, 78))
@@ -302,14 +360,9 @@ class CityGameRegressionTests(unittest.TestCase):
             self.game.handle_settings_click((300, 195))
             self.assertEqual(self.game.window_scale, 2)
 
-            # The key selector and key capture buttons must not trigger resizing.
+            # The old key-binding rows no longer exist.
             self.game.handle_settings_click((200, 236))
-            self.assertEqual(self.game.key_rebind_index, 1)
-            self.game.handle_settings_click((400, 236))
-            self.assertEqual(self.game.rebind_action, "remove")
-            self.assertTrue(self.game.assign_rebound_key(main.pygame.K_m))
-            self.assertEqual(self.game.key_bindings["remove"], main.pygame.K_m)
-
+            self.assertEqual(self.game.key_bindings, main.DEFAULT_KEY_BINDINGS)
             self.game.handle_settings_click((450, 316))
             self.assertFalse(self.game.settings_open)
         finally:
@@ -317,9 +370,6 @@ class CityGameRegressionTests(unittest.TestCase):
             self.game.sound_enabled = original["sound_enabled"]
             self.game.sound_volume = original["sound_volume"]
             self.game.window_scale = original["window_scale"]
-            self.game.key_bindings = original["key_bindings"]
-            self.game.key_rebind_index = original["key_rebind_index"]
-            self.game.rebind_action = original["rebind_action"]
             self.game.settings_open = original["settings_open"]
             self.game.window = main.pygame.display.set_mode(original["window_size"])
 
@@ -357,32 +407,34 @@ class CityGameRegressionTests(unittest.TestCase):
             self.game.tool_dragging = original_dragging
             main.pygame.event.clear()
 
-    def test_f1_selects_move_and_f11_opens_help_with_feedback(self):
-        self.game.settings_open = False
-        self.game.help_open = False
-        self.game.save_dialog_mode = None
-        self.game.modal_seed = False
-        self.game.rebind_action = None
+    def test_f1_to_f5_change_modes_and_other_keys_do_nothing(self):
+        self.game.in_game = True
         self.game.tool = "road"
         main.pygame.event.clear()
-        main.pygame.event.post(main.pygame.event.Event(
-            main.pygame.KEYDOWN, key=main.pygame.K_F1, mod=0, unicode=""
-        ))
-        self.game.process_events()
-        self.assertEqual(self.game.tool, "move")
+        for key, expected in (
+            (main.pygame.K_F1, "move"),
+            (main.pygame.K_F2, "remove"),
+            (main.pygame.K_F3, "road"),
+            (main.pygame.K_F4, "house"),
+            (main.pygame.K_F5, "restore"),
+        ):
+            main.pygame.event.post(main.pygame.event.Event(
+                main.pygame.KEYDOWN, key=key, mod=0, unicode=""
+            ))
+            self.game.process_events()
+            self.assertEqual(self.game.tool, expected)
 
-        main.pygame.event.post(main.pygame.event.Event(
-            main.pygame.KEYDOWN, key=main.pygame.K_F1, mod=0, unicode=""
-        ))
-        self.game.process_events()
-        self.assertIn("이미 선택", self.game.notice)
-
-        main.pygame.event.post(main.pygame.event.Event(
-            main.pygame.KEYDOWN, key=main.pygame.K_F11, mod=0, unicode=""
-        ))
-        self.game.process_events()
-        self.assertTrue(self.game.help_open)
-        self.game.help_open = False
+        for key in (main.pygame.K_F6, main.pygame.K_F8, main.pygame.K_F10,
+                    main.pygame.K_F11, main.pygame.K_g, main.pygame.K_r,
+                    main.pygame.K_q, main.pygame.K_w):
+            main.pygame.event.post(main.pygame.event.Event(
+                main.pygame.KEYDOWN, key=key, mod=0, unicode=""
+            ))
+            self.game.process_events()
+        self.assertEqual(self.game.tool, "restore")
+        self.assertFalse(self.game.settings_open)
+        self.assertFalse(self.game.help_open)
+        main.pygame.event.clear()
 
     def test_enlarged_toolbar_targets_select_modes(self):
         self.game.handle_click((205, 305))
@@ -390,7 +442,7 @@ class CityGameRegressionTests(unittest.TestCase):
         self.game.handle_click((250, 305))
         self.assertEqual(self.game.restore_mode, "terrain")
         self.game.handle_click((500, 305))
-        self.assertTrue(self.game.settings_open)
+        self.assertFalse(self.game.settings_open)
 
     def test_road_house_build_rotation_and_demolition_flow(self):
         sx, sy = main.MAP_W // 2, main.MAP_H // 2
