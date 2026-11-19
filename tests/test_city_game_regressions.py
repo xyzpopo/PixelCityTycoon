@@ -311,6 +311,9 @@ class CityGameRegressionTests(unittest.TestCase):
         target = (sx + 4, sy + 2)
         self.game.terrain[target[0]][target[1]].terrain = "mountain"
         self.game.terrain[target[0]][target[1]].height = 2
+        self.game.trees.discard(target)
+        self.game.rocks.discard(target)
+        self.game.roads.discard(target)
         self.game.stone = 0
         self.assertTrue(self.game.dig_terrain_at(*target))
         self.assertEqual(self.game.terrain[target[0]][target[1]].height, 1)
