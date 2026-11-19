@@ -4129,7 +4129,7 @@ class CityGame:
         for i, (key, name) in enumerate(zip(TOOL_KEYS, TOOL_NAMES)):
             self.button(
                 pygame.Rect(tool_xs[i], 292, 46, 28),
-                name, self.tool == key, small=True
+                name, self.tool == key, small=False
             )
         if self.tool == "remove":
             remove_xs = [248, 296, 344]
@@ -4168,7 +4168,7 @@ class CityGame:
             hint = "건설: 빈 땅 클릭 → 건물 선택 → 건물 위에서 마우스를 놓아 예약 · G 업그레이드"
         elif self.tool == "restore":
             hint = f"복원: {RESTORE_MODE_LABELS[self.restore_mode]} · [ ] 또는 하단 버튼으로 변경"
-        self.text(self.canvas, hint, 10, 327, 8, C["text"])
+        self.text(self.canvas, hint, 10, 327, 9, C["text"])
         city_status = self.calculate_city_service_status()
         self.text(
             self.canvas,
@@ -4176,7 +4176,7 @@ class CityGame:
             f"물 {int(city_status['water_output'])}/{int(city_status['water_demand'])} "
             f"행복 {int(city_status['happiness'])} 환경 {int(city_status['environment'])} "
             f"교통 {int(city_status['traffic'])}",
-            10, 344, 8, C["muted"]
+            10, 344, 9, C["muted"]
         )
 
         if time.time() < self.notice_until:
@@ -4288,34 +4288,43 @@ class CityGame:
         return True
 
     def handle_settings_click(self, pos: Tuple[int, int]) -> None:
+        """Handle settings clicks using the exact rectangles drawn on screen."""
         x, y = pos
-        if 190 <= x <= 450 and 96 <= y <= 128:
+        if pygame.Rect(120, 61, 400, 34).collidepoint(x, y):
             self.sandbox_mode = not self.sandbox_mode
-            self.notify("샌드박스 경제 켜짐 · 자금 부족으로 건설이 막히지 않아요." if self.sandbox_mode else "일반 경제 모드로 전환했어요.", 3)
-        elif 190 <= x <= 450 and 134 <= y <= 166:
+            self.notify(
+                "샌드박스 켜짐 · 돈 부족은 무시하지만 재료는 소비해요."
+                if self.sandbox_mode else "일반 경제 모드로 전환했어요.",
+                3
+            )
+        elif pygame.Rect(120, 100, 400, 34).collidepoint(x, y):
             self.sound_enabled = not self.sound_enabled
             self.notify("효과음 켜짐" if self.sound_enabled else "효과음 꺼짐", 2)
-        elif 190 <= x <= 450 and 172 <= y <= 204:
+        elif pygame.Rect(120, 139, 400, 34).collidepoint(x, y):
             levels = (0.0, 0.25, 0.5, 0.75, 1.0)
             current = min(range(len(levels)), key=lambda i: abs(levels[i] - self.sound_volume))
             self.sound_volume = levels[(current + 1) % len(levels)]
             self.notify(f"효과음 음량: {round(self.sound_volume * 100)}%", 2)
-        elif 190 <= x <= 450 and 210 <= y <= 242:
+        elif pygame.Rect(120, 178, 400, 34).collidepoint(x, y):
             self.window_scale = self.window_scale % 3 + 1
             self.window = pygame.display.set_mode(
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
             self.notify(f"화면 크기: {self.window_scale}배", 2)
-        elif 190 <= x <= 315 and 216 <= y <= 248:
+        elif pygame.Rect(120, 219, 190, 34).collidepoint(x, y):
             self.key_rebind_index = (self.key_rebind_index + 1) % len(KEY_BINDING_ACTIONS)
             action, label = KEY_BINDING_ACTIONS[self.key_rebind_index]
-            self.notify(f"변경 대상: {label} ({pygame.key.name(self.key_bindings[action]).upper()})", 2)
-        elif 316 <= x <= 450 and 216 <= y <= 248:
+            self.notify(
+                f"변경 대상: {label} ({pygame.key.name(self.key_bindings[action]).upper()})",
+                2
+            )
+        elif pygame.Rect(318, 219, 202, 34).collidepoint(x, y):
             self.rebind_action = KEY_BINDING_ACTIONS[self.key_rebind_index][0]
             label = KEY_BINDING_ACTIONS[self.key_rebind_index][1]
             self.notify(f"{label}에 사용할 새 키를 누르세요. ESC는 취소.", 4)
-        elif 325 <= x <= 450 and 288 <= y <= 320:
+        elif pygame.Rect(405, 305, 115, 29).collidepoint(x, y):
             self.settings_open = False
+            self.rebind_action = None
 
     def draw_settings_modal(self) -> None:
         if not self.settings_open:
@@ -4323,30 +4332,50 @@ class CityGame:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 190))
         self.canvas.blit(shade, (0, 0))
-        panel = pygame.Rect(142, 28, 356, 302)
+        panel = pygame.Rect(84, 15, 472, 330)
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
-        self.text(self.canvas, "게임 설정", panel.centerx, 45, 14, C["gold"], center=True)
+        self.text(self.canvas, "게임 설정", panel.centerx, 36, 15, C["gold"], center=True)
+
         rows = [
-            (72, "샌드박스 경제", "켜짐" if self.sandbox_mode else "꺼짐"),
-            (108, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
-            (144, "효과음 음량", f"{round(self.sound_volume * 100)}%"),
-            (180, "화면 크기", f"{self.window_scale}배"),
+            (61, "샌드박스 경제 · 돈 부족 무시 (재료는 소비)",
+             "켜짐" if self.sandbox_mode else "꺼짐"),
+            (100, "효과음", "켜짐" if self.sound_enabled else "꺼짐"),
+            (139, "효과음 음량", f"{round(self.sound_volume * 100)}%"),
+            (178, "창 크기", f"{self.window_scale}배"),
         ]
         for top, label, value in rows:
-            rect = pygame.Rect(190, top, 260, 30)
+            rect = pygame.Rect(120, top, 400, 34)
             pygame.draw.rect(self.canvas, C["panel2"], rect)
             pygame.draw.rect(self.canvas, (104, 122, 112), rect, 1)
-            self.text(self.canvas, label, 202, top + 8, 10, C["text"])
-            self.text(self.canvas, value, 435, top + 8, 10, C["gold"], center=True)
+            self.text(self.canvas, label, 133, top + 11, 10, C["text"])
+            self.text(self.canvas, value, 492, top + 11, 10, C["gold"], center=True)
+
         action, action_label = KEY_BINDING_ACTIONS[self.key_rebind_index]
         current_key = pygame.key.name(self.key_bindings[action]).upper()
-        target_label = f"변경 대상: {action_label} ({current_key})"
-        self.button(pygame.Rect(190, 216, 125, 32), target_label, small=True)
-        self.button(pygame.Rect(320, 216, 130, 32), "키 누르기", self.rebind_action is not None, small=True)
-        instruction = "새 키를 누르세요. ESC 취소." if self.rebind_action else "왼쪽: 항목 선택 · 오른쪽: 키 지정"
-        self.text(self.canvas, instruction, panel.centerx, 263, 7, C["muted"], center=True)
-        self.button(pygame.Rect(325, 288, 125, 32), "닫기", small=True)
+        self.button(
+            pygame.Rect(120, 219, 190, 34),
+            f"변경 기능: {action_label} ({current_key})",
+            small=False
+        )
+        self.button(
+            pygame.Rect(318, 219, 202, 34),
+            "새 키 입력" if self.rebind_action is not None else "키 지정",
+            self.rebind_action is not None,
+            small=False
+        )
+        self.text(
+            self.canvas,
+            "샌드박스는 돈 부족만 무시하고 목재·석재는 그대로 소비합니다.",
+            panel.centerx, 266, 9, C["muted"], center=True
+        )
+        instruction = (
+            "새 키를 누르세요. ESC를 누르면 취소됩니다."
+            if self.rebind_action else
+            "기능 선택 → [키 지정] → 사용할 키 누르기"
+        )
+        self.text(self.canvas, instruction, panel.centerx, 282, 9, C["text"], center=True)
+        self.button(pygame.Rect(405, 305, 115, 29), "닫기", small=False)
 
     def draw_help_modal(self) -> None:
         if not self.help_open:
@@ -4354,28 +4383,51 @@ class CityGame:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 195))
         self.canvas.blit(shade, (0, 0))
-        panel = pygame.Rect(82, 35, 476, 290)
+        panel = pygame.Rect(82, 12, 476, 336)
         pygame.draw.rect(self.canvas, C["panel"], panel)
         pygame.draw.rect(self.canvas, C["gold"], panel, 2)
-        self.text(self.canvas, "조작법 / 게임 도움말", panel.centerx, 51, 14, C["gold"], center=True)
+        self.text(self.canvas, "조작법 / 게임 도움말", panel.centerx, 34, 15, C["gold"], center=True)
+
         key_name = lambda action: pygame.key.name(self.key_bindings[action]).upper()
         help_lines = [
             f"{key_name('move')} 이동 · {key_name('remove')} 제거 · {key_name('road')} 도로 · {key_name('build')} 건설 · {key_name('restore')} 복원",
-            "1~5: 모드 선택 · [ / ]: 하위 작업/건물 종류 변경",
-            "마우스 왼쪽 클릭: 선택 및 예약 · 드래그: 연속 작업 예약",
-            "가운데 버튼 드래그 / WASD: 카메라 이동 · 휠: 확대/축소",
+            "1~5: 모드 선택 · [ / ]: 하위 작업 또는 건물 종류 변경",
+            "마우스 왼쪽 클릭: 선택 및 작업 예약 · 드래그: 연속 예약",
+            "가운데 버튼 드래그 또는 WASD: 카메라 이동 · 휠: 확대/축소",
             "Q/E: 지도 회전 · C: 작업자 추적 · U: 지층 조사",
-            "F3 도로 선택 후 R: 방향 회전 · F4 건물 선택 후 G: 업그레이드",
-            f"{key_name('save')} 저장 · {key_name('load')} 불러오기 · {key_name('settings')} 설정 · {key_name('help')} 도움말 · JSON은 슬롯 창",
-            "주택은 도로 옆에 건설해야 하며, 건설 예약은 자금과 재료를 확보합니다.",
+            "도로 모드에서 기존 도로 클릭 후 R: 도로 방향 회전",
+            "건설 모드에서 건물 선택 후 G: 선택한 건물 업그레이드",
+            f"{key_name('save')} 저장 · {key_name('load')} 불러오기 · {key_name('settings')} 설정 · {key_name('help')} 도움말",
+            "주택은 도로 옆에 건설해야 합니다. 예약하면 작업자가 이동해 작업합니다.",
             "채굴장과 벌목장은 시간이 지나면 각각 석재와 목재를 생산합니다.",
-            "발전소·급수탑은 일정 범위의 주택에 전력·물을 공급하며 주민 증가에 필요합니다.",
-            "행복도는 전력·물·일자리·공원·환경·교통 지표에 따라 달라집니다.",
-            "저장/불러오기에서 수동 슬롯 3개와 자동 저장본을 관리할 수 있습니다.",
+            "발전소와 급수탑은 주변 주택에 전력과 물을 공급합니다.",
+            "주민 증가는 주택·일자리·전력·물·행복도 상태에 영향을 받습니다.",
+            "설정에서 샌드박스, 효과음, 창 크기와 키 설정을 바꿀 수 있습니다.",
+            "F1은 이동 모드입니다. 도움말은 지정된 도움말 키 또는 아래 버튼을 누르세요.",
         ]
-        for index, line in enumerate(help_lines):
-            self.text(self.canvas, line, 105, 77 + index * 20, 8, C["text"])
-        self.button(pygame.Rect(430, 288, 112, 27), "닫기 (ESC)", small=True)
+
+        max_width = 430
+        rendered_lines = []
+        for source in help_lines:
+            words = source.split()
+            current = ""
+            for word in words:
+                candidate = f"{current} {word}".strip()
+                if current and self.font(9).size(candidate)[0] > max_width:
+                    rendered_lines.append(current)
+                    current = word
+                else:
+                    current = candidate
+            if current:
+                rendered_lines.append(current)
+
+        y = 57
+        line_height = 19 if len(rendered_lines) <= 14 else 14
+        font_size = 10 if len(rendered_lines) <= 14 else 9
+        for line in rendered_lines:
+            self.text(self.canvas, line, 104, y, font_size, C["text"])
+            y += line_height
+        self.button(pygame.Rect(430, 316, 112, 24), "닫기 (ESC)", small=False)
 
     def draw_save_dialog(self) -> None:
         if self.save_dialog_mode is None:
@@ -4852,7 +4904,10 @@ class CityGame:
                                  "y": self.selected_structure_anchor[1]}
                             )
                     elif event.key == self.key_bindings["move"]:
+                        already_moving = self.tool == "move"
                         self.select_tool("move")
+                        if already_moving:
+                            self.notify("이동 모드가 이미 선택되어 있어요. 목적지를 클릭하세요.", 2)
                     elif event.key == self.key_bindings["remove"]:
                         self.select_tool("remove")
                     elif event.key == self.key_bindings["road"]:
