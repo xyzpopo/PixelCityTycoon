@@ -67,6 +67,8 @@ MINE_STONE_COST = 3
 MINE_LAYER_DURATION_MINUTES = 6 * 60
 MINE_STONE_PER_LAYER = 8
 TERRAIN_RESTORE_STONE_COST = 2
+RESTORE_TREE_MONEY_COST = 100
+RESTORE_ROCK_MONEY_COST = 200
 ELEVATION_STEP = 8
 CAMERA_SPEED = 210.0
 DAILY_INCOME_PER_RESIDENT = 25
@@ -119,6 +121,8 @@ REMOVE_MODE_LABELS = {
     "dig": "산 굴착",
     "demolish": "인공 철거",
 }
+RESTORE_MODE_OPTIONS = (("terrain", "지형"), ("tree", "나무"), ("rock", "바위"))
+RESTORE_MODE_LABELS = {"terrain": "지형 복원", "tree": "나무 복원", "rock": "바위 복원"}
 REMOVE_MODE_HINTS = {
     "clear": "나무·바위를 제거해 목재·석재를 얻습니다.",
     "dig": "산 타일을 한 층 낮춰 석재를 얻습니다.",
@@ -129,7 +133,7 @@ TOOL_HINTS = {
     "remove": "제거: 자연·굴착·인공 중 대상을 선택 · [ ] 또는 하단 버튼으로 변경",
     "road": "도로: 드래그 건설 · 물 위로 연결하면 다리 · R 회전",
     "house": "건설: 빈 땅 클릭 → 건물 선택 · [ ] 종류 변경 · G 업그레이드",
-    "restore": "지형 복원: 빈 땅을 한 층 높임 · 석재 2",
+    "restore": "복원: 지형·나무·바위를 선택해 되돌립니다 · [ ]로 변경",
 }
 
 CITY_OBJECT_DEFS = {
@@ -294,6 +298,7 @@ class CityGame:
         self.camera_y = 0.0
         self.tool = "move"
         self.remove_mode = "clear"
+        self.restore_mode = "terrain"
         self.worker_x = MAP_W // 2
         self.worker_y = MAP_H // 2
         self.worker_facing = (1, 0)
@@ -319,6 +324,10 @@ class CityGame:
         self.tool_drag_visited: Set[Tuple[int, int]] = set()
         self.modal_seed = False
         self.seed_text = ""
+        self.save_dialog_mode: Optional[str] = None
+        self.save_dialog_selected = 1
+        self.save_dialog_confirm = False
+        self.autosave_elapsed = 0.0
         self.notice = "새로운 도시를 시작해 보세요!"
         self.notice_until = time.time() + 4
         self.tutorial_step = 0
@@ -389,7 +398,18 @@ class CityGame:
 
     def active_action_tool(self) -> str:
         """Resolve the selected sub-action inside a consolidated parent mode."""
-        return self.remove_mode if self.tool == "remove" else self.tool
+        if self.tool == "remove":
+            return self.remove_mode
+        if self.tool == "restore":
+            return {"terrain": "restore", "tree": "restore_tree", "rock": "restore_rock"}.get(self.restore_mode, "restore")
+        return self.tool
+
+    def cycle_restore_mode(self, direction: int) -> None:
+        modes = [mode for mode, _label in RESTORE_MODE_OPTIONS]
+        current = modes.index(self.restore_mode)
+        self.restore_mode = modes[(current + direction) % len(modes)]
+        if self.tool == "restore":
+            self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
 
     def set_remove_mode(self, mode: str) -> None:
         if mode not in REMOVE_MODE_LABELS:
@@ -633,18 +653,21 @@ class CityGame:
                 if forced_trees >= 2:
                     break
 
-        # Keep one stone source reachable in every new starter settlement.
-        # A short clear strip ensures at least one adjacent work position is open.
-        starter_rock = (sx, sy + 5)
-        for path_y in range(sy + 1, sy + 5):
-            path_tile = (sx, path_y)
-            self.terrain[path_tile[0]][path_tile[1]].terrain = "grass"
-            self.trees.discard(path_tile)
-            self.rocks.discard(path_tile)
-        self.terrain[starter_rock[0]][starter_rock[1]].terrain = "grass"
-        self.terrain[starter_rock[0]][starter_rock[1]].height = 0
-        self.trees.discard(starter_rock)
-        self.rocks.add(starter_rock)
+        # Guarantee two visible stone sources close to the starter clearing.
+        # Clear access lanes so randomized trees or hills cannot trap the worker.
+        starter_rocks = ((sx, sy + 5), (sx, sy - 5))
+        for rock_x, rock_y in starter_rocks:
+            step = 1 if rock_y > sy else -1
+            for path_y in range(sy + step, rock_y, step):
+                path_tile = (sx, path_y)
+                self.terrain[sx][path_y].terrain = "grass"
+                self.terrain[sx][path_y].height = 0
+                self.trees.discard(path_tile)
+                self.rocks.discard(path_tile)
+            self.terrain[rock_x][rock_y].terrain = "grass"
+            self.terrain[rock_x][rock_y].height = 0
+            self.trees.discard((rock_x, rock_y))
+            self.rocks.add((rock_x, rock_y))
 
         self.notify(f"새 지형 생성 완료 · 시드 {self.seed}", 3.5)
 
@@ -969,7 +992,7 @@ class CityGame:
             if not (0 <= tx < MAP_W and 0 <= ty < MAP_H) or not self.is_unlocked(tx, ty):
                 return False
             tile = self.terrain[tx][ty]
-            if tile.terrain != "grass":
+            if tile.terrain not in ("grass", "mountain"):
                 return False
             heights.add(tile.height)
             if ((tx, ty) in self.trees or (tx, ty) in self.rocks
@@ -978,9 +1001,8 @@ class CityGame:
                 return False
             if (tx, ty) == (self.worker_x, self.worker_y) and not allow_worker:
                 return False
-        # Large buildings need a level foundation.
-        if len(heights) > 1:
-            return False
+        # Multi-tile buildings may span elevation layers; each occupied tile
+        # keeps its own height and is still checked for blockers.
 
         # Prevent two planned structures from reserving overlapping ground.
         for queued_tool, qx, qy in self.work_queue:
@@ -1182,7 +1204,7 @@ class CityGame:
     def can_build_on(self, x: int, y: int, allow_worker: bool = False) -> bool:
         if not (0 <= x < MAP_W and 0 <= y < MAP_H) or not self.is_unlocked(x, y):
             return False
-        if self.terrain[x][y].terrain != "grass":
+        if self.terrain[x][y].terrain not in ("grass", "mountain"):
             return False
         if (x, y) in self.trees or (x, y) in self.rocks:
             return False
@@ -1285,6 +1307,10 @@ class CityGame:
             return spec["money"], spec["wood"], spec["stone"]
         if tool == "restore":
             return 0, 0, TERRAIN_RESTORE_STONE_COST
+        if tool == "restore_tree":
+            return RESTORE_TREE_MONEY_COST, 0, 0
+        if tool == "restore_rock":
+            return RESTORE_ROCK_MONEY_COST, 0, 0
         return 0, 0, 0
 
     def reserved_build_cost(self) -> int:
@@ -1361,43 +1387,49 @@ class CityGame:
             if not self.can_restore_terrain(
                 x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
             ):
-                return False, "복원은 빈 육지의 높이가 4단계보다 낮을 때만 가능해요."
+                return False, "지형 복원은 빈 육지의 높이가 4단계보다 낮을 때 가능해요."
             _reserved_wood, reserved_stone = self.reserved_material_costs()
             if self.stone - reserved_stone < TERRAIN_RESTORE_STONE_COST:
                 return False, f"지형 복원에는 석재 {TERRAIN_RESTORE_STONE_COST}개가 필요해요."
             return True, ""
 
-        allow_worker = (x, y) == (self.worker_x, self.worker_y)
-        if tool == "road":
-            if not self.can_build_road_on(x, y):
-                return False, "도로는 빈 땅 또는 기존 도로에서 이어지는 물 위에만 놓을 수 있어요."
-        elif tool == "house":
-            if not self.can_build_on(x, y, allow_worker=allow_worker):
-                return False, "주택은 비어 있는 잔디 타일에만 지을 수 있어요."
-            if self.queued_building_overlap("house", x, y):
-                return False, "다른 건설 예약이 이 칸을 사용하고 있어요."
-            if not self.has_planned_adjacent_road(x, y):
-                return False, "주택은 이미 있는 도로나 먼저 예약한 도로 옆에 지어야 해요."
-        elif tool == "mine":
-            if not self.can_build_mine_on(x, y, allow_worker=allow_worker):
-                return False, "채굴장은 도로 옆의 빈 잔디 타일에만 건설할 수 있어요."
-            if self.queued_building_overlap("mine", x, y):
-                return False, "다른 건설 예약이 이 칸을 사용하고 있어요."
-        elif tool in CITY_OBJECT_DEFS:
-            if not self.can_build_city_object(
-                tool, x, y, allow_worker=allow_worker
-            ):
-                spec = CITY_OBJECT_DEFS[tool]
-                if spec["road"]:
-                    return False, (
-                        f"{spec['label']}은 {spec['w']}×{spec['h']}칸의 평평한 빈 땅이 필요하고 "
-                        "도로와 인접해야 해요."
-                    )
-                return False, (
-                    f"{spec['label']}은 {spec['w']}×{spec['h']}칸의 평평한 빈 잔디 땅이 필요해요."
-                )
+        if tool in ("restore_tree", "restore_rock"):
+            if (self.terrain[x][y].terrain != "grass"
+                    or (x, y) in self.trees or (x, y) in self.rocks
+                    or (x, y) in self.roads or (x, y) in self.houses
+                    or (x, y) in self.mines or self.is_city_object_occupied(x, y)
+                    or (x, y) == (self.worker_x, self.worker_y)):
+                return False, "나무와 바위는 비어 있는 잔디 타일에만 복원할 수 있어요."
         else:
-            return False, "예약할 수 없는 작업 종류예요."
+            allow_worker = (x, y) == (self.worker_x, self.worker_y)
+            if tool == "road":
+                if not self.can_build_road_on(x, y):
+                    return False, "도로는 빈 땅 또는 기존 도로에서 이어지는 물 위에만 놓을 수 있어요."
+            elif tool == "house":
+                if not self.can_build_on(x, y, allow_worker=allow_worker):
+                    return False, "주택은 비어 있는 육지 타일에만 지을 수 있어요."
+                if self.queued_building_overlap("house", x, y):
+                    return False, "다른 건설 예약이 이 칸을 사용하고 있어요."
+                if not self.has_planned_adjacent_road(x, y):
+                    return False, "주택은 이미 있는 도로나 먼저 예약한 도로 옆에 지어야 해요."
+            elif tool == "mine":
+                if not self.can_build_mine_on(x, y, allow_worker=allow_worker):
+                    return False, "채굴장은 도로 옆의 빈 육지 타일에만 건설할 수 있어요."
+                if self.queued_building_overlap("mine", x, y):
+                    return False, "다른 건설 예약이 이 칸을 사용하고 있어요."
+            elif tool in CITY_OBJECT_DEFS:
+                if not self.can_build_city_object(tool, x, y, allow_worker=allow_worker):
+                    spec = CITY_OBJECT_DEFS[tool]
+                    if spec["road"]:
+                        return False, (
+                            f"{spec['label']}은 {spec['w']}×{spec['h']}칸의 빈 육지가 필요하고 "
+                            "도로와 인접해야 해요."
+                        )
+                    return False, (
+                        f"{spec['label']}은 {spec['w']}×{spec['h']}칸의 빈 육지가 필요해요."
+                    )
+            else:
+                return False, "예약할 수 없는 작업 종류예요."
 
         available_money = self.money - self.reserved_build_cost()
         reserved_wood, reserved_stone = self.reserved_material_costs()
@@ -1413,7 +1445,7 @@ class CityGame:
 
     def toggle_work_order(self, tool: str, x: int, y: int) -> None:
         """Queue or cancel demolition, construction, digging or terrain restoration."""
-        if tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore", *CITY_OBJECT_DEFS.keys()):
+        if tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore", "restore_tree", "restore_rock", *CITY_OBJECT_DEFS.keys()):
             return
 
         existing_index = next(
@@ -1460,6 +1492,7 @@ class CityGame:
             "clear": "자연 제거", "demolish": "인공 철거",
             "road": "도로 건설", "house": "주택 건설",
             "dig": "지형 굴착", "mine": "채굴장 건설", "restore": "지형 복원",
+            "restore_tree": "나무 복원", "restore_rock": "바위 복원",
             **{kind: f"{spec['label']} 건설" for kind, spec in CITY_OBJECT_DEFS.items()},
         }
         self.notify(
@@ -1775,6 +1808,14 @@ class CityGame:
                 valid = self.can_dig_terrain(x, y)
             elif tool == "restore":
                 valid = self.can_restore_terrain(x, y, allow_worker=True)
+            elif tool in ("restore_tree", "restore_rock"):
+                valid = (
+                    self.terrain[x][y].terrain == "grass"
+                    and (x, y) not in self.trees and (x, y) not in self.rocks
+                    and (x, y) not in self.roads and (x, y) not in self.houses
+                    and (x, y) not in self.mines and not self.is_city_object_occupied(x, y)
+                    and self.money >= self.order_costs(tool, x, y)[0]
+                )
             else:
                 valid = False
 
@@ -1793,7 +1834,7 @@ class CityGame:
 
         tool, x, y = self.work_queue[0]
         target = (x, y)
-        if tool in ("clear", "dig"):
+        if tool in ("clear", "dig", "restore_tree", "restore_rock"):
             path = self.find_worker_path_to_work_target(target)
         else:
             footprint = (
@@ -1854,6 +1895,16 @@ class CityGame:
             self.dig_terrain_at(x, y)
         elif tool == "restore":
             self.restore_terrain_at(x, y)
+        elif tool == "restore_tree":
+            if self.terrain[x][y].terrain == "grass" and self.money >= RESTORE_TREE_MONEY_COST:
+                self.trees.add((x, y))
+                self.money -= RESTORE_TREE_MONEY_COST
+                self.notify(f"나무를 복원했어요 · -₩{RESTORE_TREE_MONEY_COST:,}")
+        elif tool == "restore_rock":
+            if self.terrain[x][y].terrain == "grass" and self.money >= RESTORE_ROCK_MONEY_COST:
+                self.rocks.add((x, y))
+                self.money -= RESTORE_ROCK_MONEY_COST
+                self.notify(f"바위를 복원했어요 · -₩{RESTORE_ROCK_MONEY_COST:,}")
         else:
             built = self.perform_build_order(tool, x, y, start_animation=False)
             if not built and tool == "road":
@@ -1866,7 +1917,7 @@ class CityGame:
     def act_on_tile(self, x: int, y: int) -> None:
         """Compatibility entry point: all non-movement tools queue actions."""
         action_tool = self.active_action_tool()
-        if action_tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
+        if action_tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore", "restore_tree", "restore_rock"):
             self.toggle_work_order(action_tool, x, y)
 
     def check_tutorial(self) -> None:
@@ -1902,15 +1953,101 @@ class CityGame:
             f"도시 영역 확장 완료 · 반경 {radius}타일 · -₩{cost:,}", 3
         )
 
-    def save_game(self) -> None:
+    def save_slot_path(self, slot: int, autosave: bool = False) -> Optional[Path]:
+        if IS_WEB:
+            return None
+        return SAVE_DIR / ("city_autosave.json" if autosave else f"city_slot_{slot}.json")
+
+    def save_slot_key(self, slot: int = 1, autosave: bool = False) -> str:
+        return WEB_SAVE_KEY + ("-autosave" if autosave else f"-slot-{slot}")
+
+    def read_save_text(self, slot: int = 1, autosave: bool = False) -> str:
+        if IS_WEB:
+            try:
+                from platform import window
+                saved_text = window.localStorage.getItem(self.save_slot_key(slot, autosave))
+                if saved_text is None and slot == 1 and not autosave:
+                    saved_text = window.localStorage.getItem(WEB_SAVE_KEY)
+            except Exception as storage_error:
+                raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
+            if saved_text is None:
+                raise FileNotFoundError
+            return str(saved_text)
+
+        path = self.save_slot_path(slot, autosave)
+        if path is None:
+            raise FileNotFoundError
+        if not path.exists() and slot == 1 and not autosave and SAVE_FILE.exists():
+            path = SAVE_FILE
+        return path.read_text(encoding="utf-8")
+
+    def save_slot_info(self, slot: int, autosave: bool = False) -> Tuple[bool, str]:
+        try:
+            data = json.loads(self.read_save_text(slot, autosave))
+            if not isinstance(data, dict) or type(data.get("seed")) is not int:
+                return True, "손상된 저장 데이터"
+            return True, f"DAY {data.get('day', '?')} · {data.get('saved_at', '이전 버전 저장')}"
+        except FileNotFoundError:
+            return False, "빈 저장 데이터"
+        except (OSError, ValueError, TypeError):
+            return True, "읽을 수 없는 저장 파일"
+
+    def open_save_dialog(self, mode: str) -> None:
+        if mode not in ("save", "load"):
+            return
+        self.save_dialog_mode = mode
+        self.save_dialog_selected = 1
+        self.save_dialog_confirm = False
+
+    def handle_save_dialog_click(self, pos: Tuple[int, int]) -> None:
+        x, y = pos
+        mode = self.save_dialog_mode
+        if mode is None:
+            return
+        if self.save_dialog_confirm:
+            if 190 <= x <= 315 and 280 <= y <= 310:
+                self.save_game(self.save_dialog_selected)
+                self.save_dialog_mode = None
+                self.save_dialog_confirm = False
+                return
+            if 325 <= x <= 450 and 280 <= y <= 310:
+                self.save_dialog_confirm = False
+                return
+            return
+        for slot, top in enumerate((112, 150, 188), start=1):
+            if 160 <= x <= 480 and top <= y <= top + 30:
+                exists, _description = self.save_slot_info(slot)
+                self.save_dialog_selected = slot
+                if mode == "load":
+                    if exists:
+                        self.load_game(slot)
+                        self.save_dialog_mode = None
+                    else:
+                        self.notify(f"슬롯 {slot}은 비어 있어요.", 2)
+                elif exists:
+                    self.save_dialog_confirm = True
+                else:
+                    self.save_game(slot)
+                    self.save_dialog_mode = None
+                return
+        if mode == "load" and 160 <= x <= 480 and 226 <= y <= 256:
+            self.load_game(autosave=True)
+            self.save_dialog_mode = None
+            return
+        if 325 <= x <= 450 and 280 <= y <= 310:
+            self.save_dialog_mode = None
+            self.save_dialog_confirm = False
+
+    def save_game(self, slot: int = 1, autosave: bool = False) -> None:
+        if not autosave and (type(slot) is not int or not 1 <= slot <= 3):
+            self.notify("저장 슬롯은 1~3 중에서 선택해 주세요.", 2.5)
+            return
         data = {
-            "version": 12,
+            "version": 13,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "seed": self.seed,
             "underground_mined": [list(p) for p in sorted(self.underground_mined)],
-            "mine_sites": [
-                [x, y, layer, progress]
-                for (x, y), (layer, progress) in sorted(self.mines.items())
-            ],
+            "mine_sites": [[x, y, layer, progress] for (x, y), (layer, progress) in sorted(self.mines.items())],
             "map_rotation": self.map_rotation,
             "camera_follow_worker": self.camera_follow_worker,
             "underground_view": self.underground_view,
@@ -1919,24 +2056,12 @@ class CityGame:
             "rocks": [list(p) for p in sorted(self.rocks)],
             "roads": [list(p) for p in sorted(self.roads)],
             "road_direction": self.road_direction,
-            "road_directions": [
-                [x, y, axis] for (x, y), axis in sorted(self.road_directions.items())
-            ],
-            "terrain_heights": [
-                [self.terrain[x][y].height for y in range(MAP_H)]
-                for x in range(MAP_W)
-            ],
+            "road_directions": [[x, y, axis] for (x, y), axis in sorted(self.road_directions.items())],
+            "terrain_heights": [[self.terrain[x][y].height for y in range(MAP_H)] for x in range(MAP_W)],
             "houses": [list(p) for p in sorted(self.houses)],
-            "house_levels": [
-                [x, y, level] for (x, y), level in sorted(self.house_levels.items())
-            ],
-            "city_objects": [
-                [x, y, data.get("type"), data.get("level", 1)]
-                for (x, y), data in sorted(self.city_objects.items())
-            ],
-            "logging_progress": [
-                [x, y, progress] for (x, y), progress in sorted(self.logging_progress.items())
-            ],
+            "house_levels": [[x, y, level] for (x, y), level in sorted(self.house_levels.items())],
+            "city_objects": [[x, y, item.get("type"), item.get("level", 1)] for (x, y), item in sorted(self.city_objects.items())],
+            "logging_progress": [[x, y, progress] for (x, y), progress in sorted(self.logging_progress.items())],
             "expand_level": self.expand_level,
             "money": self.money,
             "population": self.population,
@@ -1946,41 +2071,47 @@ class CityGame:
             "game_minutes": self.game_minutes,
             "worker": [self.worker_x, self.worker_y],
             "worker_facing": list(self.worker_facing),
-            "work_orders": [{"tool": tool, "x": x, "y": y}
-                            for tool, x, y in self.work_queue],
+            "work_orders": [{"tool": tool, "x": x, "y": y} for tool, x, y in self.work_queue],
             "tutorial_step": self.tutorial_step,
             "tutorial_done": self.tutorial_done,
             "tutorial_removed": self.tutorial_removed,
             "tutorial_roads": self.tutorial_roads,
             "tutorial_house_built": self.tutorial_house_built,
+            "restore_mode": self.restore_mode,
         }
         temporary_file = None
         try:
-            serialized = json.dumps(
-                data, ensure_ascii=False, indent=2, allow_nan=False
-            )
+            serialized = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
             if IS_WEB:
                 try:
                     from platform import window
-                    window.localStorage.setItem(WEB_SAVE_KEY, serialized)
+                    window.localStorage.setItem(self.save_slot_key(slot, autosave), serialized)
+                    if not autosave and slot == 1:
+                        window.localStorage.setItem(WEB_SAVE_KEY, serialized)
                 except Exception as storage_error:
                     raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
-                self.notify("브라우저에 도시를 저장했어요.", 3)
             else:
-                temporary_file = SAVE_FILE.with_suffix(SAVE_FILE.suffix + ".tmp")
+                path = self.save_slot_path(slot, autosave)
+                if path is None:
+                    raise OSError("저장 위치를 확인할 수 없어요.")
+                temporary_file = path.with_suffix(path.suffix + ".tmp")
                 SAVE_DIR.mkdir(parents=True, exist_ok=True)
                 temporary_file.write_text(serialized, encoding="utf-8")
-                os.replace(temporary_file, SAVE_FILE)
-                self.notify("도시를 안전하게 저장했어요.", 3)
+                os.replace(temporary_file, path)
+            if autosave:
+                self.autosave_elapsed = 0.0
+            else:
+                self.notify(f"슬롯 {slot}에 도시를 저장했어요.", 3)
         except (OSError, TypeError, ValueError) as exc:
             if temporary_file is not None:
                 try:
                     temporary_file.unlink(missing_ok=True)
                 except OSError:
                     pass
-            self.notify(f"저장 실패 · 기존 저장 파일은 유지했어요: {exc}", 4)
+            if not autosave:
+                self.notify(f"저장 실패 · 기존 저장 데이터는 유지했어요: {exc}", 4)
 
-    def load_game(self) -> None:
+    def load_game(self, slot: int = 1, autosave: bool = False) -> None:
         state_fields = (
             "seed", "rng", "terrain", "trees", "rocks", "roads",
             "road_directions", "road_direction", "selected_road_tile",
@@ -1995,7 +2126,7 @@ class CityGame:
             "worker_move_progress", "worker_moved", "worker_action",
             "worker_action_timer", "worker_action_elapsed",
             "worker_action_hit_played", "worker_pending_action", "work_queue",
-            "work_path_active", "tool", "remove_mode", "camera_x", "camera_y",
+            "work_path_active", "tool", "remove_mode", "restore_mode", "camera_x", "camera_y",
             "tutorial_step", "tutorial_done", "tutorial_removed",
             "tutorial_roads", "tutorial_house_built",
         )
@@ -2003,19 +2134,12 @@ class CityGame:
             name: copy.deepcopy(getattr(self, name)) for name in state_fields
         }
         try:
-            if IS_WEB:
-                try:
-                    from platform import window
-                    saved_text = window.localStorage.getItem(WEB_SAVE_KEY)
-                except Exception as storage_error:
-                    raise OSError("브라우저 저장 공간에 접근할 수 없어요.") from storage_error
-                if saved_text is None:
-                    raise FileNotFoundError
-                data = json.loads(str(saved_text))
-            else:
-                data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
+            data = json.loads(self.read_save_text(slot, autosave))
             if not isinstance(data, dict):
                 raise ValueError("저장 파일의 최상위 데이터가 올바르지 않아요.")
+            saved_version = data.get("version", 1)
+            if type(saved_version) is not int or saved_version > 13:
+                raise ValueError("이 저장 파일은 현재 게임 버전보다 새 버전에서 만들어졌어요.")
             saved_seed = data.get("seed")
             if type(saved_seed) is not int:
                 raise ValueError("저장 파일의 지도 시드가 올바르지 않아요.")
@@ -2076,7 +2200,7 @@ class CityGame:
             self.houses = {
                 pos for pos in valid_tile_set(data.get("houses", []))
                 if self.is_unlocked(*pos)
-                and self.terrain[pos[0]][pos[1]].terrain == "grass"
+                and self.terrain[pos[0]][pos[1]].terrain in ("grass", "mountain")
                 and pos not in self.trees and pos not in self.rocks
                 and pos not in self.roads
             }
@@ -2104,7 +2228,7 @@ class CityGame:
                     ):
                         continue
                     pos = (entry[0], entry[1])
-                    if (self.is_unlocked(*pos) and self.terrain[pos[0]][pos[1]].terrain == "grass"
+                    if (self.is_unlocked(*pos) and self.terrain[pos[0]][pos[1]].terrain in ("grass", "mountain")
                             and pos not in self.roads and pos not in self.houses
                             and pos not in self.trees and pos not in self.rocks):
                         self.mines[pos] = (entry[2], float(entry[3]))
@@ -2173,7 +2297,7 @@ class CityGame:
                     if (tool == "clear" and type(x) is int and type(y) is int
                             and ((x, y) in self.roads or (x, y) in self.houses or (x, y) in self.mines)):
                         tool = "demolish"
-                    if (tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore", *CITY_OBJECT_DEFS.keys())
+                    if (tool not in ("clear", "demolish", "road", "house", "dig", "mine", "restore", "restore_tree", "restore_rock", *CITY_OBJECT_DEFS.keys())
                             or type(x) is not int or type(y) is not int
                             or not (0 <= x < MAP_W and 0 <= y < MAP_H)
                             or not self.is_unlocked(x, y)):
@@ -2201,6 +2325,13 @@ class CityGame:
                         continue
                     if tool == "restore" and not self.can_restore_terrain(x, y, allow_worker=True):
                         continue
+                    if tool in ("restore_tree", "restore_rock") and (
+                        self.terrain[x][y].terrain != "grass"
+                        or (x, y) in self.trees or (x, y) in self.rocks
+                        or (x, y) in self.roads or (x, y) in self.houses
+                        or (x, y) in self.mines or self.is_city_object_occupied(x, y)
+                    ):
+                        continue
                     self.work_queue.append((tool, x, y))
                     if tool == "road":
                         self.road_directions.setdefault((x, y), self.infer_road_axis(x, y))
@@ -2210,16 +2341,29 @@ class CityGame:
             self.tutorial_removed = safe_saved_int(data.get("tutorial_removed", 0), 0, 0, 1000000)
             self.tutorial_roads = safe_saved_int(data.get("tutorial_roads", 0), 0, 0, 1000000)
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
+            saved_restore_mode = data.get("restore_mode", "terrain")
+            self.restore_mode = saved_restore_mode if saved_restore_mode in ("terrain", "tree", "rock") else "terrain"
             self.center_camera()
             if self.camera_follow_worker:
                 self.center_camera_on_worker()
-            self.notify("저장된 도시를 불러왔어요.", 3)
+            self.notify(
+                f"{'자동 저장' if autosave else f'슬롯 {slot}'} 도시를 불러왔어요.",
+                3,
+            )
         except FileNotFoundError:
-            self.notify("저장 파일이 없어요. 먼저 저장해 주세요.", 3)
+            self.notify(
+                "자동 저장 데이터가 없어요." if autosave
+                else f"슬롯 {slot}에는 저장 데이터가 없어요.",
+                3,
+            )
         except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
             for name, value in previous_state.items():
                 setattr(self, name, value)
-            self.notify(f"불러오기 실패 · 기존 도시는 유지했어요: {exc}", 4)
+            self.notify(
+                f"불러오기 실패 · 현재 도시는 유지했어요. 저장 파일이 손상됐거나 "
+                f"버전이 다를 수 있어요. 다른 슬롯/자동 저장을 확인하세요. ({exc})",
+                5,
+            )
 
     # ------------------------------------------------------------------
     # Rendering
@@ -3626,6 +3770,13 @@ class CityGame:
                         allowed = self.can_restore_terrain(
                             x, y, allow_worker=(x, y) == (self.worker_x, self.worker_y)
                         )
+                    elif active_tool in ("restore_tree", "restore_rock"):
+                        allowed = (
+                            self.terrain[x][y].terrain == "grass"
+                            and (x, y) not in self.trees and (x, y) not in self.rocks
+                            and (x, y) not in self.roads and (x, y) not in self.houses
+                            and (x, y) not in self.mines and not self.is_city_object_occupied(x, y)
+                        )
                     else:
                         allowed = self.worker_can_stand(x, y)
                     if self.selected_road_tile == (x, y):
@@ -3737,7 +3888,7 @@ class CityGame:
             ("1. 캐릭터 이동하기", "[이동] 모드에서 빈 땅을 클릭해 보세요."),
             (f"2. 나무 제거하기 ({min(self.tutorial_removed,2)}/2)", "[제거] 도구로 나무 2개를 치우세요."),
             (f"3. 도로 배치하기 ({min(self.tutorial_roads,3)}/3)", "도로는 목재 1개, 집은 목재·석재가 필요해요."),
-            ("4. 첫 번째 집 건설하기", "도로 옆에 집을 지으세요. 바위는 [제거]로!"),
+            ("4. 첫 번째 집 건설하기", "도로 옆에 집을 지으세요. 바위 1개를 제거해 석재를 얻으세요."),
         ]
         title, hint = tasks[min(self.tutorial_step, 3)]
         self.text(self.canvas, title, 15, 62, 10, C["white"])
@@ -3780,6 +3931,12 @@ class CityGame:
                     pygame.Rect(remove_xs[index], 294, 43, 23),
                     label, self.remove_mode == mode, small=True
                 )
+        elif self.tool == "restore":
+            for index, (mode, label) in enumerate(RESTORE_MODE_OPTIONS):
+                self.button(
+                    pygame.Rect([234, 280, 326][index], 294, 43, 23),
+                    label, self.restore_mode == mode, small=True
+                )
 
         expansion_costs = [5000, 15000, 35000, 75000]
         cost_text = "최대" if self.expand_level >= len(expansion_costs) else f"₩{expansion_costs[self.expand_level]:,}"
@@ -3800,6 +3957,8 @@ class CityGame:
             hint = "도로: 드래그 건설 · 기존 도로 클릭 후 R 회전 · 물 위로 연결하면 다리"
         elif self.tool == "house":
             hint = "건설: 빈 땅 클릭 → 건물 선택 → 건물 위에서 마우스를 놓아 예약 · G 업그레이드"
+        elif self.tool == "restore":
+            hint = f"복원: {RESTORE_MODE_LABELS[self.restore_mode]} · [ ] 또는 하단 버튼으로 변경"
         self.text(self.canvas, hint, 10, 327, 8, C["text"])
         self.text(
             self.canvas,
@@ -3818,6 +3977,48 @@ class CityGame:
         if self.modal_seed:
             self.draw_seed_modal()
         self.draw_build_palette()
+        self.draw_save_dialog()
+
+    def draw_save_dialog(self) -> None:
+        if self.save_dialog_mode is None:
+            return
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 190))
+        self.canvas.blit(shade, (0, 0))
+        panel = pygame.Rect(142, 76, 356, 250)
+        pygame.draw.rect(self.canvas, C["panel"], panel)
+        pygame.draw.rect(self.canvas, C["gold"], panel, 2)
+        title = "저장 슬롯 선택" if self.save_dialog_mode == "save" else "불러올 슬롯 선택"
+        self.text(self.canvas, title, panel.centerx, 94, 13, C["gold"], center=True)
+        for slot, top in enumerate((112, 150, 188), start=1):
+            rect = pygame.Rect(160, top, 320, 30)
+            active = slot == self.save_dialog_selected
+            exists, description = self.save_slot_info(slot)
+            fill = C["panel3"] if active else C["panel2"]
+            pygame.draw.rect(self.canvas, fill, rect)
+            pygame.draw.rect(self.canvas, C["gold"] if active else (88, 104, 103), rect, 1)
+            self.text(self.canvas, f"슬롯 {slot}", rect.x + 10, rect.y + 5, 10, C["white"])
+            color = C["muted"] if exists else (130, 145, 137)
+            self.text(self.canvas, description, rect.x + 82, rect.y + 6, 8, color)
+        if self.save_dialog_mode == "load":
+            exists, description = self.save_slot_info(1, autosave=True)
+            auto_rect = pygame.Rect(160, 226, 320, 30)
+            pygame.draw.rect(self.canvas, C["panel2"], auto_rect)
+            pygame.draw.rect(self.canvas, (88, 104, 103), auto_rect, 1)
+            self.text(self.canvas, "자동 저장", auto_rect.x + 10, auto_rect.y + 5, 10, C["gold"])
+            self.text(
+                self.canvas, description if exists else "아직 자동 저장 데이터가 없어요.",
+                auto_rect.x + 82, auto_rect.y + 6, 8, C["muted"]
+            )
+        if self.save_dialog_confirm:
+            self.text(
+                self.canvas, f"슬롯 {self.save_dialog_selected}의 저장 데이터를 덮어쓸까요?",
+                panel.centerx, 266, 9, C["white"], center=True
+            )
+            self.button(pygame.Rect(190, 280, 125, 30), "덮어쓰기", True, small=True)
+            self.button(pygame.Rect(325, 280, 125, 30), "취소", small=True)
+        else:
+            self.button(pygame.Rect(325, 280, 125, 30), "닫기", small=True)
 
     def draw_seed_modal(self) -> None:
         shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
@@ -3863,7 +4064,7 @@ class CityGame:
             keys.extend([("C", pygame.K_c), ("U", pygame.K_u), ("R", pygame.K_r)])
         elif upgrade_available:
             keys.extend([("C", pygame.K_c), ("U", pygame.K_u), ("G", pygame.K_g)])
-        elif self.tool in ("remove", "house") or self.underground_view:
+        elif self.tool in ("remove", "house", "restore") or self.underground_view:
             keys.extend([
                 ("[", pygame.K_LEFTBRACKET), ("]", pygame.K_RIGHTBRACKET),
                 ("C", pygame.K_c), ("U", pygame.K_u)
@@ -3899,6 +4100,9 @@ class CityGame:
 
     def handle_touch_down(self, pos: Tuple[int, int]) -> None:
         """Route a touch press through the same tile and UI handlers as a mouse press."""
+        if self.save_dialog_mode is not None:
+            self.handle_click(pos)
+            return
         if self.modal_seed:
             return
         hit = self.build_palette_hit_test(pos)
@@ -3942,6 +4146,9 @@ class CityGame:
 
     def handle_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
+        if self.save_dialog_mode is not None:
+            self.handle_save_dialog_click(pos)
+            return
         if self.modal_seed:
             return
         virtual_key = self.virtual_key_at(pos)
@@ -3953,9 +4160,9 @@ class CityGame:
                 self.modal_seed = True
                 self.seed_text = ""
             elif 573 <= x <= 602 and 4 <= y <= 27:
-                self.save_game()
+                self.open_save_dialog("save")
             elif 605 <= x <= 638 and 4 <= y <= 27:
-                self.load_game()
+                self.open_save_dialog("load")
             return
         if y >= BOTTOM_Y:
             if 294 <= y <= 317:
@@ -3969,6 +4176,12 @@ class CityGame:
                     for index, tx in enumerate(remove_xs):
                         if tx <= x <= tx + 43:
                             self.set_remove_mode(REMOVE_MODE_OPTIONS[index][0])
+                            return
+                elif self.tool == "restore":
+                    for index, tx in enumerate((234, 280, 326)):
+                        if tx <= x <= tx + 43:
+                            self.restore_mode = RESTORE_MODE_OPTIONS[index][0]
+                            self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
                             return
             if 373 <= x <= 461 and 294 <= y <= 317:
                 self.expand_land()
@@ -4034,7 +4247,7 @@ class CityGame:
                     self.tool_drag_last_tile = tile
                 elif self.tool == "road" and tile in self.roads:
                     self.selected_road_tile = tile
-                elif active_tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore"):
+                elif active_tool in ("clear", "demolish", "road", "house", "dig", "mine", "restore", "restore_tree", "restore_rock"):
                     self.queue_drag_order(active_tool, x0, y0)
             if x0 == x1 and y0 == y1:
                 break
@@ -4138,7 +4351,11 @@ class CityGame:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.modal_seed:
+                if self.save_dialog_mode is not None:
+                    if event.key == pygame.K_ESCAPE:
+                        self.save_dialog_mode = None
+                        self.save_dialog_confirm = False
+                elif self.modal_seed:
                     if event.key == pygame.K_ESCAPE:
                         self.modal_seed = False
                     elif event.key == pygame.K_RETURN:
@@ -4203,6 +4420,8 @@ class CityGame:
                             self.cycle_remove_mode(-1)
                         elif self.tool == "house":
                             self.cycle_building_type(-1)
+                        elif self.tool == "restore":
+                            self.cycle_restore_mode(-1)
                     elif event.key == pygame.K_RIGHTBRACKET:
                         if self.underground_view:
                             self.underground_layer = min(3, self.underground_layer + 1)
@@ -4211,6 +4430,8 @@ class CityGame:
                             self.cycle_remove_mode(1)
                         elif self.tool == "house":
                             self.cycle_building_type(1)
+                        elif self.tool == "restore":
+                            self.cycle_restore_mode(1)
                     elif event.key == pygame.K_1:
                         self.select_tool("move")
                     elif event.key == pygame.K_2:
@@ -4258,6 +4479,10 @@ class CityGame:
                     continue
                 logical = self.logical_mouse(event.pos)
                 if self.modal_seed:
+                    continue
+                if self.save_dialog_mode is not None:
+                    if event.button == 1:
+                        self.handle_click(logical)
                     continue
                 if event.button == 1:
                     if self.build_palette_open:
@@ -4411,6 +4636,8 @@ class CityGame:
         return jobs
 
     def update(self, dt: float) -> None:
+        if self.save_dialog_mode is not None:
+            return
         self.update_worker(dt)
         if not self.modal_seed:
             keys = pygame.key.get_pressed()
@@ -4425,6 +4652,10 @@ class CityGame:
                 self.camera_y -= (camera_dy / length) * CAMERA_SPEED * dt
             elif self.camera_follow_worker:
                 self.center_camera_on_worker()
+        self.autosave_elapsed += max(0.0, dt)
+        if self.autosave_elapsed >= 180.0:
+            self.save_game(autosave=True)
+
         if self.worker_action_timer > 0:
             self.worker_action_elapsed = min(
                 WORK_ACTION_DURATION,
