@@ -4300,11 +4300,11 @@ class CityGame:
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
             )
             self.notify(f"화면 크기: {self.window_scale}배", 2)
-        elif 190 <= x <= 315 and 248 <= y <= 280:
+        elif 190 <= x <= 315 and 216 <= y <= 248:
             self.key_rebind_index = (self.key_rebind_index + 1) % len(KEY_BINDING_ACTIONS)
             action, label = KEY_BINDING_ACTIONS[self.key_rebind_index]
             self.notify(f"변경 대상: {label} ({pygame.key.name(self.key_bindings[action]).upper()})", 2)
-        elif 316 <= x <= 450 and 248 <= y <= 280:
+        elif 316 <= x <= 450 and 216 <= y <= 248:
             self.rebind_action = KEY_BINDING_ACTIONS[self.key_rebind_index][0]
             label = KEY_BINDING_ACTIONS[self.key_rebind_index][1]
             self.notify(f"{label}에 사용할 새 키를 누르세요. ESC는 취소.", 4)
