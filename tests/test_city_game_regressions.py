@@ -173,5 +173,12 @@ class CityGameRegressionTests(unittest.TestCase):
         after = self.game.canvas.get_at((320, 180))
         self.assertNotEqual(before, after)
 
+    def test_resident_walkers_render_on_roads(self):
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        self.game.population = 12
+        self.game.roads = {(sx, sy), (sx + 1, sy), (sx + 2, sy)}
+        self.game.road_directions = {(sx, sy): "x", (sx + 1, sy): "x", (sx + 2, sy): "x"}
+        self.game.draw_resident_walkers()
+
 if __name__ == "__main__":
     unittest.main()
