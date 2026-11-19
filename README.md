@@ -7,6 +7,8 @@ Isometric sandbox city-building game built with Python and pygame-ce.
 - Run `run_windows.bat` to launch from Python.
 - Run `build_windows.bat` to create the standalone Windows EXE.
 - The Windows build continues to use the regular synchronous Pygame loop and saves to Documents/PixelCityTycoon/saves.
+- The title menu separates single-player (new game / continue) from multiplayer (create room / join room). Online multiplayer is not connected yet.
+- In-game mode keys are fixed: F1 Move, F2 Remove, F3 Road, F4 Build, F5 Restore. ESC or the Menu button autosaves and returns to the title screen.
 
 ## Browser version
 
