@@ -334,6 +334,10 @@ class CityGame:
         self.last_mouse = (0, 0)
         self.touch_input_active = False
         self.active_finger_id: Optional[int] = None
+        self.touch_fingers: Dict[int, Tuple[int, int]] = {}
+        self.touch_gesture_mode: Optional[str] = None
+        self.touch_last_midpoint = (0, 0)
+        self.touch_last_distance = 0.0
         self.tool_dragging = False
         self.tool_drag_start_tile: Optional[Tuple[int, int]] = None
         self.tool_drag_last_tile: Optional[Tuple[int, int]] = None
@@ -4414,6 +4418,35 @@ class CityGame:
             pygame.KEYDOWN, key=key, mod=pygame.KMOD_NONE, unicode=""
         ))
 
+    def update_multi_touch_gesture(self) -> None:
+        """Pan with two fingers and zoom when their separation changes."""
+        if len(self.touch_fingers) < 2:
+            return
+        first, second = list(self.touch_fingers.values())[:2]
+        midpoint = (
+            (first[0] + second[0]) // 2,
+            (first[1] + second[1]) // 2,
+        )
+        distance = math.hypot(second[0] - first[0], second[1] - first[1])
+        if self.touch_gesture_mode != "camera":
+            self.touch_gesture_mode = "camera"
+            self.touch_last_midpoint = midpoint
+            self.touch_last_distance = distance
+            return
+        dx = midpoint[0] - self.touch_last_midpoint[0]
+        dy = midpoint[1] - self.touch_last_midpoint[1]
+        if distance > self.touch_last_distance * 1.10:
+            self.change_zoom(1, midpoint)
+            self.touch_last_distance = distance
+        elif distance < self.touch_last_distance * 0.90:
+            self.change_zoom(-1, midpoint)
+            self.touch_last_distance = distance
+        self.camera_x += dx
+        self.camera_y += dy
+        if dx or dy:
+            self.camera_follow_worker = False
+        self.touch_last_midpoint = midpoint
+
     def handle_touch_down(self, pos: Tuple[int, int]) -> None:
         """Route a touch press through the same tile and UI handlers as a mouse press."""
         if self.save_dialog_mode is not None:
@@ -4785,33 +4818,52 @@ class CityGame:
                     elif event.key == pygame.K_F9:
                         self.load_game()
             elif event.type == pygame.FINGERDOWN:
-                if self.active_finger_id is not None:
-                    continue
                 self.touch_input_active = True
-                self.active_finger_id = event.finger_id
                 logical = (
                     int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
                     int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
                 )
-                if self.virtual_key_at(logical) is not None:
-                    self.handle_click(logical)
-                else:
-                    self.handle_touch_down(logical)
-            elif event.type == pygame.FINGERMOTION:
-                if self.active_finger_id == event.finger_id:
-                    logical = (
-                        int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
-                        int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
-                    )
-                    self.handle_touch_motion(logical)
-            elif event.type == pygame.FINGERUP:
-                if self.active_finger_id == event.finger_id:
-                    logical = (
-                        int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
-                        int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
-                    )
-                    self.handle_touch_up(logical)
+                self.touch_fingers[event.finger_id] = logical
+                if len(self.touch_fingers) == 1:
+                    self.active_finger_id = event.finger_id
+                    if self.virtual_key_at(logical) is not None:
+                        self.handle_click(logical)
+                    else:
+                        self.handle_touch_down(logical)
+                elif len(self.touch_fingers) == 2:
+                    # A second finger converts the gesture into camera control.
                     self.active_finger_id = None
+                    self.tool_dragging = False
+                    self.tool_drag_start_tile = None
+                    self.tool_drag_last_tile = None
+                    self.tool_drag_visited.clear()
+                    self.build_palette_dragging = False
+                    self.build_palette_pressed_index = None
+                    self.update_multi_touch_gesture()
+            elif event.type == pygame.FINGERMOTION:
+                if event.finger_id in self.touch_fingers:
+                    logical = (
+                        int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
+                        int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
+                    )
+                    self.touch_fingers[event.finger_id] = logical
+                    if len(self.touch_fingers) >= 2:
+                        self.update_multi_touch_gesture()
+                    elif self.active_finger_id == event.finger_id:
+                        self.handle_touch_motion(logical)
+            elif event.type == pygame.FINGERUP:
+                if event.finger_id in self.touch_fingers:
+                    logical = (
+                        int(clamp(event.x * LOGICAL_W, 0, LOGICAL_W - 1)),
+                        int(clamp(event.y * LOGICAL_H, 0, LOGICAL_H - 1)),
+                    )
+                    if len(self.touch_fingers) == 1 and self.active_finger_id == event.finger_id:
+                        self.handle_touch_up(logical)
+                    self.touch_fingers.pop(event.finger_id, None)
+                    self.active_finger_id = None
+                    if len(self.touch_fingers) < 2:
+                        self.touch_gesture_mode = None
+                        self.touch_last_distance = 0.0
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if getattr(event, "touch", False):
                     continue
