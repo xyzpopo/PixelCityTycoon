@@ -3814,8 +3814,7 @@ class CityGame:
                 f"지층 조사 화면 · {self.underground_layer}/3층 · 채굴은 지상의 채굴장이 자동 진행 · U: 지상 복귀 · [ ]: 층 변경",
                 12, TOP_H + 5, 9, (224, 218, 187)
             )
-            mouse = pygame.mouse.get_pos()
-            mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+            mx, my = self.logical_mouse(pygame.mouse.get_pos())
             if VIEW_RECT.collidepoint(mx, my):
                 tile = self.screen_to_tile(mx, my)
                 if tile:
@@ -3943,8 +3942,7 @@ class CityGame:
         if self.tool != "move" or self.dragging or self.modal_seed:
             return
 
-        mouse = pygame.mouse.get_pos()
-        mx, my = mouse[0] / WINDOW_SCALE, mouse[1] / WINDOW_SCALE
+        mx, my = self.logical_mouse(pygame.mouse.get_pos())
         if not VIEW_RECT.collidepoint(mx, my):
             return
 
