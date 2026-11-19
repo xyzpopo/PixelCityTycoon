@@ -271,6 +271,85 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertFalse(self.game.assign_rebound_key(main.pygame.K_ESCAPE))
         self.assertEqual(self.game.rebind_action, "road")
 
+    def test_settings_click_targets_match_visible_controls(self):
+        original = {
+            "sandbox_mode": self.game.sandbox_mode,
+            "sound_enabled": self.game.sound_enabled,
+            "sound_volume": self.game.sound_volume,
+            "window_scale": self.game.window_scale,
+            "key_bindings": self.game.key_bindings.copy(),
+            "key_rebind_index": self.game.key_rebind_index,
+            "rebind_action": self.game.rebind_action,
+            "settings_open": self.game.settings_open,
+            "window_size": self.game.window.get_size(),
+        }
+        try:
+            self.game.sandbox_mode = False
+            self.game.sound_enabled = True
+            self.game.sound_volume = 0.5
+            self.game.window_scale = 1
+            self.game.key_bindings = main.DEFAULT_KEY_BINDINGS.copy()
+            self.game.key_rebind_index = 0
+            self.game.rebind_action = None
+            self.game.settings_open = True
+
+            self.game.handle_settings_click((300, 78))
+            self.assertTrue(self.game.sandbox_mode)
+            self.game.handle_settings_click((300, 117))
+            self.assertFalse(self.game.sound_enabled)
+            self.game.handle_settings_click((300, 156))
+            self.assertEqual(self.game.sound_volume, 0.75)
+            self.game.handle_settings_click((300, 195))
+            self.assertEqual(self.game.window_scale, 2)
+
+            # The key selector and key capture buttons must not trigger resizing.
+            self.game.handle_settings_click((200, 236))
+            self.assertEqual(self.game.key_rebind_index, 1)
+            self.game.handle_settings_click((400, 236))
+            self.assertEqual(self.game.rebind_action, "remove")
+            self.assertTrue(self.game.assign_rebound_key(main.pygame.K_m))
+            self.assertEqual(self.game.key_bindings["remove"], main.pygame.K_m)
+
+            self.game.handle_settings_click((450, 316))
+            self.assertFalse(self.game.settings_open)
+        finally:
+            self.game.sandbox_mode = original["sandbox_mode"]
+            self.game.sound_enabled = original["sound_enabled"]
+            self.game.sound_volume = original["sound_volume"]
+            self.game.window_scale = original["window_scale"]
+            self.game.key_bindings = original["key_bindings"]
+            self.game.key_rebind_index = original["key_rebind_index"]
+            self.game.rebind_action = original["rebind_action"]
+            self.game.settings_open = original["settings_open"]
+            self.game.window = main.pygame.display.set_mode(original["window_size"])
+
+    def test_f1_selects_move_and_f11_opens_help_with_feedback(self):
+        self.game.settings_open = False
+        self.game.help_open = False
+        self.game.save_dialog_mode = None
+        self.game.modal_seed = False
+        self.game.rebind_action = None
+        self.game.tool = "road"
+        main.pygame.event.clear()
+        main.pygame.event.post(main.pygame.event.Event(
+            main.pygame.KEYDOWN, key=main.pygame.K_F1, mod=0, unicode=""
+        ))
+        self.game.process_events()
+        self.assertEqual(self.game.tool, "move")
+
+        main.pygame.event.post(main.pygame.event.Event(
+            main.pygame.KEYDOWN, key=main.pygame.K_F1, mod=0, unicode=""
+        ))
+        self.game.process_events()
+        self.assertIn("이미 선택", self.game.notice)
+
+        main.pygame.event.post(main.pygame.event.Event(
+            main.pygame.KEYDOWN, key=main.pygame.K_F11, mod=0, unicode=""
+        ))
+        self.game.process_events()
+        self.assertTrue(self.game.help_open)
+        self.game.help_open = False
+
     def test_enlarged_toolbar_targets_select_modes(self):
         self.game.handle_click((205, 305))
         self.assertEqual(self.game.tool, "restore")
