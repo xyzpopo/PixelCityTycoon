@@ -107,14 +107,17 @@ class CityGameRegressionTests(unittest.TestCase):
                  patch.object(main, "SAVE_FILE", legacy_file):
                 self.game.sandbox_mode = True
                 self.game.sound_enabled = False
+                self.game.sound_volume = 0.25
                 self.game.window_scale = 3
                 self.game.save_game(3)
                 self.game.sandbox_mode = False
                 self.game.sound_enabled = True
+                self.game.sound_volume = 1.0
                 self.game.window_scale = 1
                 self.game.load_game(3)
                 self.assertTrue(self.game.sandbox_mode)
                 self.assertFalse(self.game.sound_enabled)
+                self.assertEqual(self.game.sound_volume, 0.25)
                 self.assertEqual(self.game.window_scale, 3)
                 self.assertEqual(self.game.window.get_size(), (main.LOGICAL_W * 3, main.LOGICAL_H * 3))
 
