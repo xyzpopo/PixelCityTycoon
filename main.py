@@ -2398,7 +2398,7 @@ class CityGame:
             self.tutorial_house_built = bool(data.get("tutorial_house_built", False))
             self.sandbox_mode = bool(data.get("sandbox_mode", False))
             self.sound_enabled = bool(data.get("sound_enabled", True))
-            saved_scale = data.get("window_scale", self.window_scale)
+            saved_scale = data.get("window_scale", 2)
             self.window_scale = saved_scale if saved_scale in (1, 2, 3) else 2
             self.window = pygame.display.set_mode(
                 (LOGICAL_W * self.window_scale, LOGICAL_H * self.window_scale)
