@@ -81,5 +81,19 @@ class GameCommandTests(unittest.TestCase):
             WorldSnapshot(revision=0, world={"money": float("nan")})
 
 
+    def test_queue_work_accepts_all_current_single_player_tools(self):
+        tools = (
+            "clear", "demolish", "road", "house", "dig", "mine", "restore",
+            "restore_tree", "restore_rock", "commercial", "industrial",
+            "public", "park", "lamp", "decor_tree", "logging", "power", "water",
+        )
+        for index, tool in enumerate(tools, start=1):
+            with self.subTest(tool=tool):
+                command = GameCommand.create(
+                    "player-a", index, index - 1, "queue_work",
+                    {"tool": tool, "x": 10, "y": 10},
+                )
+                self.assertEqual(command.payload["tool"], tool)
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import pygame
+from game_command_adapter import LocalGameCommandAdapter
 
 # -----------------------------------------------------------------------------
 # Paths and configuration
@@ -382,6 +383,7 @@ class CityGame:
 
         self.generate_world(self.seed)
         self.center_camera()
+        self.command_adapter = LocalGameCommandAdapter(self)
 
     # ------------------------------------------------------------------
     # Fonts / UI helpers
@@ -716,6 +718,8 @@ class CityGame:
             self.rocks.add((rock_x, rock_y))
 
         self.notify(f"새 지형 생성 완료 · 시드 {self.seed}", 3.5)
+        if hasattr(self, "command_adapter"):
+            self.command_adapter.reset_world()
 
     def center_camera(self) -> None:
         cx = MAP_W // 2
@@ -2442,6 +2446,8 @@ class CityGame:
             if self.camera_follow_worker:
                 self.center_camera_on_worker()
             self.last_load_success = True
+            if hasattr(self, "command_adapter"):
+                self.command_adapter.reset_world()
             self.notify(
                 f"{'자동 저장' if autosave else f'슬롯 {slot}'} 도시를 불러왔어요.",
                 3,
@@ -4615,7 +4621,7 @@ class CityGame:
                             self.notify(f"복원 대상: {RESTORE_MODE_LABELS[self.restore_mode]}", 1.6)
                             return
             if 396 <= x <= 474 and 292 <= y <= 322:
-                self.expand_land()
+                self.command_adapter.dispatch("expand_land", {})
                 return
             if 480 <= x <= 526 and 292 <= y <= 322:
                 self.settings_open = True
@@ -4647,9 +4653,11 @@ class CityGame:
         if self.selected_road_tile != (x, y):
             self.selected_road_tile = None
         if self.tool == "move":
-            self.set_worker_destination(x, y)
+            self.command_adapter.dispatch("move_worker", {"x": x, "y": y})
         else:
-            self.toggle_work_order(self.active_action_tool(), x, y)
+            self.command_adapter.dispatch(
+                "queue_work", {"tool": self.active_action_tool(), "x": x, "y": y}
+            )
 
     def queue_drag_order(self, tool: str, x: int, y: int) -> None:
         """Queue one drag-painted surface tile without toggling existing orders."""
@@ -4835,7 +4843,14 @@ class CityGame:
                         else:
                             self.running = False
                     elif event.key == pygame.K_g:
-                        self.upgrade_selected_structure()
+                        if self.selected_structure_anchor is None:
+                            self.upgrade_selected_structure()
+                        else:
+                            self.command_adapter.dispatch(
+                                "upgrade_building",
+                                {"x": self.selected_structure_anchor[0],
+                                 "y": self.selected_structure_anchor[1]}
+                            )
                     elif event.key == self.key_bindings["move"]:
                         self.select_tool("move")
                     elif event.key == self.key_bindings["remove"]:
@@ -4847,7 +4862,13 @@ class CityGame:
                     elif event.key == self.key_bindings["restore"]:
                         self.select_tool("restore")
                     elif event.key == pygame.K_r and self.tool == "road":
-                        self.toggle_road_direction()
+                        if self.selected_road_tile is None:
+                            self.toggle_road_direction()
+                        else:
+                            self.command_adapter.dispatch(
+                                "rotate_road",
+                                {"x": self.selected_road_tile[0], "y": self.selected_road_tile[1]}
+                            )
                     elif event.key == pygame.K_q:
                         self.rotate_map(-1)
                     elif event.key == pygame.K_e:

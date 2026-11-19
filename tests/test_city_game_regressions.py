@@ -338,5 +338,31 @@ class CityGameRegressionTests(unittest.TestCase):
         self.game.worker_pending_action = ("restore_rock", *rock)
         self.game.complete_pending_work_action()
         self.assertIn(rock, self.game.rocks)
+
+    def test_local_command_adapter_routes_core_actions(self):
+        adapter = self.game.command_adapter
+        sx, sy = main.MAP_W // 2, main.MAP_H // 2
+        target = (sx + 2, sy)
+        self.game.terrain[target[0]][target[1]].terrain = "grass"
+        self.game.trees.discard(target)
+        self.game.rocks.discard(target)
+        self.game.money = 100_000
+        self.game.wood = 20
+        self.game.stone = 20
+        self.assertTrue(adapter.dispatch("queue_work", {"tool": "road", "x": target[0], "y": target[1]}))
+        self.assertEqual(adapter.last_command.action, "queue_work")
+        order_id = adapter.last_command.command_id
+        self.assertIn(("road", *target), self.game.work_queue)
+        self.assertTrue(adapter.dispatch("cancel_work", {"order_id": order_id}))
+        self.assertNotIn(("road", *target), self.game.work_queue)
+        self.game.roads.add(target)
+        self.game.road_directions[target] = "x"
+        self.game.tool = "road"
+        self.assertTrue(adapter.dispatch("rotate_road", {"x": target[0], "y": target[1]}))
+        self.assertEqual(self.game.road_directions[target], "y")
+        old_expand = self.game.expand_level
+        self.assertTrue(adapter.dispatch("expand_land", {}))
+        self.assertEqual(self.game.expand_level, old_expand + 1)
+        self.assertEqual(adapter.revision, 4)
 if __name__ == "__main__":
     unittest.main()
