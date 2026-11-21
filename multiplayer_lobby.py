@@ -93,6 +93,8 @@ class LobbyManager:
         room = self.rooms.get(code)
         if room is None:
             raise LobbyError("해당 방을 찾을 수 없어요.")
+        if self.player_rooms.get(player_id) == code:
+            return code
         if room.status != "waiting":
             raise LobbyError("이미 게임이 시작된 방이에요.")
         if len(room.players) >= MAX_PLAYERS_PER_ROOM:
