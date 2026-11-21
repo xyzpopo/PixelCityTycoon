@@ -120,14 +120,20 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertEqual(self.game.day, 1)
         self.assertFalse(self.game.tutorial_done)
 
-    def test_multiplayer_menu_is_visible_but_does_not_fake_online_play(self):
+    def test_multiplayer_menu_shows_connection_form_without_faking_gameplay(self):
         self.game.in_game = False
         self.game.menu_screen = "main"
         self.game.handle_click((480, 139))
         self.assertEqual(self.game.menu_screen, "multi")
-        self.game.handle_click((480, 130))
+        self.assertIsNone(self.game.multiplayer_room)
+        self.assertTrue(self.game.multiplayer_server_url.startswith("ws://"))
         self.assertFalse(self.game.in_game)
-        self.assertIn("준비 중", self.game.menu_message)
+
+    def test_title_menu_uses_the_live_game_world_renderer(self):
+        self.game.in_game = False
+        with patch.object(self.game, "draw_world") as draw_world:
+            self.game.draw_menu()
+            draw_world.assert_called_once()
 
     def test_continue_loads_selected_slot_from_single_player_menu(self):
         with tempfile.TemporaryDirectory() as temporary:
