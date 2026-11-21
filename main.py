@@ -365,7 +365,7 @@ class CityGame:
         self.multiplayer_join_code = ""
         self.multiplayer_chat_text = ""
         self.multiplayer_chat_history: List[str] = []
-        self.multiplayer_status = "서버 주소를 확인하고 방을 만들거나 참가하세요."
+        self.multiplayer_status = "닉네임을 입력하고 방을 만들거나 참가하세요."
         self.multiplayer_room: Optional[Dict[str, object]] = None
         self.multiplayer_client = None
         self.menu_input_focus: Optional[str] = None
@@ -5177,7 +5177,7 @@ class CityGame:
                             if self.menu_input_focus == "chat":
                                 self.send_multiplayer_chat()
                             else:
-                                order = ("server", "nickname", "room_code")
+                                order = ("nickname", "room_code")
                                 try:
                                     index = order.index(self.menu_input_focus)
                                     self.menu_input_focus = order[(index + 1) % len(order)]
