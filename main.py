@@ -2190,6 +2190,7 @@ class CityGame:
                 self.menu_screen = "multi"
                 self.menu_input_focus = "server"
                 self.multiplayer_status = "서버 주소를 확인하고 방을 만들거나 참가하세요."
+                pygame.key.start_text_input()
             elif pygame.Rect(382, 164, 210, 38).collidepoint(x, y):
                 self.settings_open = True
             elif pygame.Rect(382, 212, 210, 38).collidepoint(x, y):
@@ -2218,14 +2219,23 @@ class CityGame:
                     return
                 if pygame.Rect(382, 199, 100, 31).collidepoint(x, y):
                     self.menu_input_focus = None
+                    pygame.key.stop_text_input()
                     self.start_multiplayer_action("create_room")
                     return
                 if pygame.Rect(492, 199, 100, 31).collidepoint(x, y):
                     self.menu_input_focus = None
+                    pygame.key.stop_text_input()
                     self.start_multiplayer_action("join_room")
+                    return
+                if pygame.Rect(382, 235, 100, 28).collidepoint(x, y):
+                    if self.multiplayer_client is not None:
+                        self.multiplayer_client.send({"type": "list_rooms"})
+                    else:
+                        self.multiplayer_status = "먼저 방 서버에 연결해 주세요."
                     return
                 if pygame.Rect(382, 273, 210, 34).collidepoint(x, y):
                     self.menu_input_focus = None
+                    pygame.key.stop_text_input()
                     self.menu_screen, self.menu_message = "main", ""
                     return
             else:
@@ -4570,8 +4580,9 @@ class CityGame:
                 )
                 self.draw_menu_button(pygame.Rect(382, 199, 100, 31), "방 만들기")
                 self.draw_menu_button(pygame.Rect(492, 199, 100, 31), "방 참가")
+                self.draw_menu_button(pygame.Rect(382, 235, 100, 28), "방 목록")
                 self.text(
-                    self.canvas, self.multiplayer_status, 489, 245, 7,
+                    self.canvas, self.multiplayer_status, 489, 249, 7,
                     (230, 196, 125), center=True
                 )
                 self.draw_menu_button(pygame.Rect(382, 273, 210, 34), "← 메인 메뉴")
@@ -4592,8 +4603,11 @@ class CityGame:
                         self.canvas, ready_text, 580, 111 + index * 23, 8,
                         C["green"] if player.get("ready") else C["muted"], center=True
                     )
+                recent_chat = self.multiplayer_chat_history[-2:]
+                for index, line in enumerate(recent_chat):
+                    self.text(self.canvas, line[:40], 386, 194 + index * 10, 7, C["muted"])
                 self.text(
-                    self.canvas, self.multiplayer_status, 489, 215, 7,
+                    self.canvas, self.multiplayer_status, 489, 218, 7,
                     (230, 196, 125), center=True
                 )
                 self.draw_menu_button(pygame.Rect(382, 232, 100, 31), "준비 변경")
@@ -5144,6 +5158,7 @@ class CityGame:
                     if self.menu_screen == "multi" and self.menu_input_focus:
                         if event.key == pygame.K_ESCAPE:
                             self.menu_input_focus = None
+                            pygame.key.stop_text_input()
                         elif event.key == pygame.K_BACKSPACE:
                             field = self.menu_input_focus
                             if field == "server":
@@ -5169,6 +5184,7 @@ class CityGame:
                             self.menu_screen = "main"
                             self.menu_message = ""
                             self.menu_input_focus = None
+                            pygame.key.stop_text_input()
                         else:
                             self.running = False
                 else:
