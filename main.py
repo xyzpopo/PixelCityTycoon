@@ -4849,7 +4849,10 @@ class CityGame:
             self.menu_input_replace = False
 
         if field == "room_code":
-            cleaned = "".join(ch for ch in value.upper() if ch.isalnum())
+            cleaned = "".join(
+                ch for ch in value.upper()
+                if ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            )
             self.multiplayer_join_code = (self.multiplayer_join_code + cleaned)[:6]
             return
 
@@ -4880,8 +4883,12 @@ class CityGame:
             self.virtual_keyboard_shift = not self.virtual_keyboard_shift
             return
         if kind == "language":
-            self.virtual_keyboard_mode = "en" if self.virtual_keyboard_mode == "ko" else "ko"
-            self.virtual_keyboard_shift = self.menu_input_focus == "room_code"
+            if self.menu_input_focus == "room_code":
+                self.virtual_keyboard_mode = "en"
+                self.virtual_keyboard_shift = True
+            else:
+                self.virtual_keyboard_mode = "en" if self.virtual_keyboard_mode == "ko" else "ko"
+                self.virtual_keyboard_shift = False
             return
         if kind == "done":
             self.virtual_keyboard_open = False
@@ -4896,7 +4903,7 @@ class CityGame:
             if self.menu_input_focus != "room_code":
                 self.apply_virtual_keyboard_character(" ", "character")
             return
-        if kind == "character":
+        if kind in ("character", "jamo"):
             if shifted and self.virtual_keyboard_shift:
                 value = shifted
             elif self.menu_input_focus == "room_code":
@@ -4938,7 +4945,7 @@ class CityGame:
 
         for rect, label, value, kind, shifted in self.virtual_keyboard_specs():
             shown = label
-            if kind == "character":
+            if kind in ("character", "jamo"):
                 if shifted and self.virtual_keyboard_shift:
                     shown = shifted
                 elif self.menu_input_focus == "room_code":
