@@ -71,6 +71,7 @@ class MultiplayerClient:
                         let active = false;
                         let attempts = 0;
                         let pendingFirstMessage = null;
+                        let targetUrl = "";
                         const retryDelays = [1000, 2000, 4000, 8000, 12000, 15000, 15000];
 
                         function stopTimers() {
@@ -115,14 +116,13 @@ class MultiplayerClient:
                             if (!active) return;
                             attempts += 1;
                             try {
-                                socket = new WebSocket(window.PCTLobbyBridge.url);
+                                socket = new WebSocket(targetUrl);
                                 socket.onopen = () => {
                                     attempts = 0;
                                     events.push({type: "transport_connected"});
                                     if (pendingFirstMessage) {
                                         try {
                                             socket.send(pendingFirstMessage);
-                                            pendingFirstMessage = null;
                                         } catch (error) {
                                             events.push({
                                                 type: "error",
@@ -166,7 +166,7 @@ class MultiplayerClient:
                                 active = true;
                                 attempts = 0;
                                 pendingFirstMessage = firstMessage || null;
-                                this.url = url;
+                                targetUrl = url;
                                 openSocket();
                                 return true;
                             },
