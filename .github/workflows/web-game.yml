@@ -8,7 +8,7 @@ on:
       - "multiplayer_client.py"
       - "virtual_keyboard.py"
       - "prepare_korean_font.py"
-      - "tests/**
+      - "tests/**"
       - "assets/**"
       - "requirements-web.txt"
       - ".github/workflows/web-game.yml"
@@ -19,7 +19,7 @@ on:
       - "multiplayer_client.py"
       - "virtual_keyboard.py"
       - "prepare_korean_font.py"
-      - "tests/**
+      - "tests/**"
       - "assets/**"
       - "requirements-web.txt"
       - ".github/workflows/web-game.yml"
