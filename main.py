@@ -357,6 +357,18 @@ class CityGame:
         self.menu_screen = "main"
         self.in_game = False
         self.menu_message = ""
+        self.multiplayer_server_url = os.environ.get(
+            "PIXEL_CITY_SERVER_URL", "ws://127.0.0.1:8765/ws"
+        )
+        self.multiplayer_nickname = f"Player{random.randint(1000, 9999)}"
+        self.multiplayer_join_code = ""
+        self.multiplayer_chat_text = ""
+        self.multiplayer_chat_history: List[str] = []
+        self.multiplayer_status = "서버 주소를 확인하고 방을 만들거나 참가하세요."
+        self.multiplayer_room: Optional[Dict[str, object]] = None
+        self.multiplayer_client = None
+        self.menu_input_focus: Optional[str] = None
+        self.multiplayer_room_list: List[Dict[str, object]] = []
         self.settings_open = False
         self.help_open = False
         self.sandbox_mode = False
