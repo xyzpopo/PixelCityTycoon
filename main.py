@@ -368,6 +368,7 @@ class CityGame:
         self.multiplayer_room: Optional[Dict[str, object]] = None
         self.multiplayer_client = None
         self.menu_input_focus: Optional[str] = None
+        self.menu_input_replace = False
         self.multiplayer_room_list: List[Dict[str, object]] = []
         self.settings_open = False
         self.help_open = False
@@ -2189,6 +2190,7 @@ class CityGame:
             elif pygame.Rect(382, 116, 210, 38).collidepoint(x, y):
                 self.menu_screen = "multi"
                 self.menu_input_focus = "server"
+                self.menu_input_replace = True
                 self.multiplayer_status = "서버 주소를 확인하고 방을 만들거나 참가하세요."
                 pygame.key.start_text_input()
             elif pygame.Rect(382, 164, 210, 38).collidepoint(x, y):
@@ -2210,12 +2212,18 @@ class CityGame:
             if self.multiplayer_room is None:
                 if pygame.Rect(382, 79, 210, 24).collidepoint(x, y):
                     self.menu_input_focus = "server"
+                    self.menu_input_replace = True
+                    pygame.key.start_text_input()
                     return
                 if pygame.Rect(382, 121, 210, 24).collidepoint(x, y):
                     self.menu_input_focus = "nickname"
+                    self.menu_input_replace = True
+                    pygame.key.start_text_input()
                     return
                 if pygame.Rect(382, 163, 210, 24).collidepoint(x, y):
                     self.menu_input_focus = "room_code"
+                    self.menu_input_replace = True
+                    pygame.key.start_text_input()
                     return
                 if pygame.Rect(382, 199, 100, 31).collidepoint(x, y):
                     self.menu_input_focus = None
@@ -2254,6 +2262,8 @@ class CityGame:
                     return
                 if pygame.Rect(382, 269, 210, 24).collidepoint(x, y):
                     self.menu_input_focus = "chat"
+                    self.menu_input_replace = True
+                    pygame.key.start_text_input()
                     return
                 if pygame.Rect(382, 303, 100, 28).collidepoint(x, y):
                     self.leave_multiplayer_room()
@@ -5139,6 +5149,8 @@ class CityGame:
             if event.type == pygame.QUIT:
                 if self.in_game:
                     self.save_game(autosave=True)
+                if self.multiplayer_client is not None:
+                    self.multiplayer_client.close()
                 self.running = False
             elif event.type == pygame.KEYDOWN:
                 if self.settings_open:
@@ -5207,6 +5219,14 @@ class CityGame:
                 if not self.in_game and self.menu_screen == "multi" and self.menu_input_focus:
                     value = event.text
                     field = self.menu_input_focus
+                    if self.menu_input_replace and field != "chat":
+                        if field == "server":
+                            self.multiplayer_server_url = ""
+                        elif field == "nickname":
+                            self.multiplayer_nickname = ""
+                        elif field == "room_code":
+                            self.multiplayer_join_code = ""
+                    self.menu_input_replace = False
                     if field == "server":
                         cleaned = "".join(ch for ch in value if ch.isprintable())
                         self.multiplayer_server_url = (self.multiplayer_server_url + cleaned)[:180]
