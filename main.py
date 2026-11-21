@@ -4052,8 +4052,10 @@ class CityGame:
 
         # Night lighting is applied after world objects but before the tutorial card.
         self.draw_time_of_day()
-        # Tutorial card.
-        self.draw_tutorial_card()
+        # The same world renderer is used behind the title menu. Keep the
+        # tutorial overlay for active play only.
+        if self.in_game:
+            self.draw_tutorial_card()
         self.canvas.set_clip(None)
 
     def draw_work_queue(self, underground_only: bool = False) -> None:
@@ -4357,112 +4359,126 @@ class CityGame:
         self.text(self.canvas, label, rect.centerx + 3, rect.centery,
                   11, C["gold"] if hovered else C["text"], center=True)
 
-    def draw_menu_art(self) -> None:
-        """Draw a tiny isometric settlement as original procedural pixel art."""
-        pygame.draw.polygon(self.canvas, (28, 48, 52), [
-            (0, 196), (0, 150), (42, 130), (82, 157), (122, 132),
-            (170, 158), (214, 130), (276, 159), (340, 137), (360, 166), (360, 230)
-        ])
-        pygame.draw.polygon(self.canvas, (34, 61, 59), [
-            (0, 224), (0, 192), (48, 171), (98, 197), (151, 167),
-            (213, 200), (269, 175), (360, 210), (360, 270), (0, 270)
-        ])
-        for gx in range(-5, 6):
-            for gy in range(-4, 5):
-                cx, cy = 176 + (gx - gy) * 15, 215 + (gx + gy) * 7
-                if cx < 18 or cx > 345 or cy < 150 or cy > 320:
-                    continue
-                pts = [(cx, cy - 8), (cx + 16, cy), (cx, cy + 8), (cx - 16, cy)]
-                pygame.draw.polygon(self.canvas, (75, 130, 87) if (gx + gy) % 2 else (65, 118, 83), pts)
-                pygame.draw.lines(self.canvas, (95, 151, 102), True, pts, 1)
-
-        for step in range(-3, 4):
-            cx, cy = 176 + step * 15, 215 + step * 7
-            pts = [(cx, cy - 3), (cx + 7, cy), (cx, cy + 3), (cx - 7, cy)]
-            pygame.draw.polygon(self.canvas, (91, 95, 87), pts)
-            pygame.draw.lines(self.canvas, (145, 143, 119), True, pts, 1)
-
-        def house(gx, gy, wall, roof):
-            cx, cy = 176 + (gx - gy) * 15, 215 + (gx + gy) * 7
-            pygame.draw.ellipse(self.canvas, (25, 48, 41), (cx - 13, cy - 5, 27, 11))
-            pygame.draw.polygon(self.canvas, wall, [
-                (cx - 8, cy - 17), (cx, cy - 12), (cx, cy + 1), (cx - 8, cy - 4)
-            ])
-            darker = tuple(max(0, c - 20) for c in wall)
-            pygame.draw.polygon(self.canvas, darker, [
-                (cx, cy - 12), (cx + 8, cy - 17), (cx + 8, cy - 4), (cx, cy + 1)
-            ])
-            pygame.draw.polygon(self.canvas, roof, [
-                (cx - 11, cy - 17), (cx, cy - 25), (cx + 11, cy - 17), (cx, cy - 10)
-            ])
-            pygame.draw.line(self.canvas, (225, 197, 125), (cx, cy - 9), (cx, cy - 1), 2)
-            pygame.draw.rect(self.canvas, (236, 200, 104), (cx - 6, cy - 12, 3, 3))
-
-        def tree(gx, gy):
-            cx, cy = 176 + (gx - gy) * 15, 215 + (gx + gy) * 7
-            pygame.draw.ellipse(self.canvas, (23, 48, 40), (cx - 9, cy - 4, 19, 8))
-            pygame.draw.rect(self.canvas, (111, 78, 48), (cx - 2, cy - 14, 4, 15))
-            pygame.draw.rect(self.canvas, (34, 91, 56), (cx - 8, cy - 25, 16, 12))
-            pygame.draw.rect(self.canvas, (63, 139, 76), (cx - 5, cy - 29, 10, 8))
-            self.canvas.set_at((cx - 4, cy - 25), (119, 177, 93))
-
-        house(-1, 0, (187, 148, 105), (143, 79, 63))
-        house(2, -1, (175, 164, 124), (105, 94, 72))
-        house(0, 2, (179, 137, 91), (133, 71, 58))
-        for spot in [(-4, 1), (-3, -2), (3, 2), (4, -1), (-1, 4), (2, -3)]:
-            tree(*spot)
-        pygame.draw.line(self.canvas, (46, 104, 132), (26, 255), (106, 306), 4)
-        pygame.draw.line(self.canvas, (82, 157, 174), (30, 254), (106, 301), 1)
-
     def draw_menu(self) -> None:
-        """Render the main title screen and its navigation submenus."""
-        self.canvas.fill((17, 30, 37))
-        for band in range(0, LOGICAL_H, 24):
-            shade = 18 + (band // 24) * 2
-            pygame.draw.rect(self.canvas, (shade, shade + 15, shade + 19),
-                             (0, band, LOGICAL_W, 24))
-        for i in range(26):
-            self.canvas.fill((75, 112, 105), ((i * 83 + 19) % 350, (i * 47 + 13) % 115, 2, 2))
-        pygame.draw.rect(self.canvas, (43, 69, 65), (18, 18, 326, 324), 1)
-        pygame.draw.rect(self.canvas, (115, 146, 113), (22, 22, 318, 334), 1)
-        self.text(self.canvas, "PIXEL CITY", 37, 43, 27, C["gold"])
-        self.text(self.canvas, "TYCOON", 39, 73, 22, C["white"])
-        pygame.draw.rect(self.canvas, C["gold"], (39, 105, 185, 2))
-        self.text(self.canvas, "BUILD A CITY. MAKE IT YOURS.", 39, 117, 9, (190, 207, 183))
-        self.draw_menu_art()
-        self.text(self.canvas, "A LITTLE WORLD, MADE BY YOU", 39, 326, 8, (145, 170, 157))
-        self.text(self.canvas, "v0.2  ·  ISOMETRIC CITY BUILDER", 39, 339, 7, (110, 139, 132))
+        """Render the title menu over the actual, live game-world scene."""
+        # Reuse the exact terrain/building/road/tree/worker renderer from gameplay.
+        self.draw_world()
 
-        panel = pygame.Rect(366, 28, 246, 310)
-        pygame.draw.rect(self.canvas, (10, 21, 28), panel.move(0, 4))
-        pygame.draw.rect(self.canvas, (71, 99, 87), panel, 1)
-        pygame.draw.rect(self.canvas, (27, 43, 47), panel.inflate(-4, -4))
-        pygame.draw.line(self.canvas, C["gold"], (385, 59), (593, 59), 1)
+        # A restrained dark overlay keeps the landscape visible while making
+        # the menu readable at every time-of-day tint.
+        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
+        shade.fill((7, 15, 22, 92))
+        self.canvas.blit(shade, (0, 0))
+
+        # Game title plate on the upper-left, floating over the real world.
+        title_plate = pygame.Surface((250, 67), pygame.SRCALPHA)
+        title_plate.fill((19, 32, 38, 220))
+        self.canvas.blit(title_plate, (17, 18))
+        pygame.draw.rect(self.canvas, (104, 139, 111), (17, 18, 250, 67), 1)
+        pygame.draw.rect(self.canvas, C["gold"], (17, 18, 4, 67))
+        self.text(self.canvas, "PIXEL CITY", 32, 27, 22, C["gold"])
+        self.text(self.canvas, "TYCOON", 34, 51, 15, C["white"])
+        self.text(self.canvas, "BUILD A CITY. MAKE IT YOURS.", 157, 63, 7, C["muted"])
+
+        # Right-hand panel. The map remains visible around and behind it.
+        panel_rect = pygame.Rect(366, 18, 246, 324)
+        panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
+        panel.fill((18, 31, 36, 232))
+        self.canvas.blit(panel, panel_rect.topleft)
+        pygame.draw.rect(self.canvas, (105, 135, 105), panel_rect, 1)
+        pygame.draw.line(self.canvas, C["gold"], (385, 52), (593, 52), 1)
+
         if self.menu_screen == "main":
-            self.text(self.canvas, "메인 메뉴", 489, 45, 13, C["gold"], center=True)
-            for i, label in enumerate(["싱글 플레이", "멀티 플레이", "설정", "도움말", "나가기"]):
-                self.draw_menu_button(pygame.Rect(382, 77 + i * 44, 210, 36), label)
+            self.text(self.canvas, "메인 메뉴", 489, 38, 13, C["gold"], center=True)
+            labels = ["싱글 플레이", "멀티 플레이", "설정", "도움말", "나가기"]
+            for index, label in enumerate(labels):
+                self.draw_menu_button(pygame.Rect(382, 68 + index * 48, 210, 38), label)
+
         elif self.menu_screen == "single":
-            self.text(self.canvas, "싱글 플레이", 489, 45, 13, C["gold"], center=True)
-            self.text(self.canvas, "혼자서 나만의 도시를 만들어 보세요.", 489, 78, 8, C["muted"], center=True)
-            self.draw_menu_button(pygame.Rect(382, 111, 210, 38), "새 게임")
-            self.draw_menu_button(pygame.Rect(382, 158, 210, 38), "이어하기")
-            self.draw_menu_button(pygame.Rect(382, 258, 210, 34), "← 메인 메뉴")
+            self.text(self.canvas, "싱글 플레이", 489, 38, 13, C["gold"], center=True)
+            self.text(self.canvas, "혼자서 나만의 도시를 만들어 보세요.", 489, 69, 8, C["muted"], center=True)
+            self.draw_menu_button(pygame.Rect(382, 104, 210, 40), "새 게임")
+            self.draw_menu_button(pygame.Rect(382, 154, 210, 40), "이어하기")
+            self.draw_menu_button(pygame.Rect(382, 273, 210, 34), "← 메인 메뉴")
+
         else:
-            self.text(self.canvas, "멀티 플레이", 489, 45, 13, C["gold"], center=True)
-            self.text(self.canvas, "친구와 함께 도시를 만드는 모드", 489, 78, 8, C["muted"], center=True)
-            self.draw_menu_button(pygame.Rect(382, 111, 210, 38), "방 만들기")
-            self.draw_menu_button(pygame.Rect(382, 158, 210, 38), "방 참가")
-            self.text(self.canvas, "온라인 서버 연동 준비 중", 489, 220, 9, C["gold"], center=True)
-            self.draw_menu_button(pygame.Rect(382, 258, 210, 34), "← 메인 메뉴")
-        if self.menu_message:
-            self.text(self.canvas, self.menu_message, 489, 310, 7, (230, 196, 125), center=True)
+            self.text(self.canvas, "멀티 플레이", 489, 38, 13, C["gold"], center=True)
+            if self.multiplayer_room is None:
+                self.text(self.canvas, "서버 주소", 384, 66, 8, C["muted"])
+                self.draw_menu_input(
+                    pygame.Rect(382, 79, 210, 24), self.multiplayer_server_url,
+                    self.menu_input_focus == "server"
+                )
+                self.text(self.canvas, "닉네임", 384, 108, 8, C["muted"])
+                self.draw_menu_input(
+                    pygame.Rect(382, 121, 210, 24), self.multiplayer_nickname,
+                    self.menu_input_focus == "nickname"
+                )
+                self.text(self.canvas, "방 코드 (참가할 때)", 384, 150, 8, C["muted"])
+                self.draw_menu_input(
+                    pygame.Rect(382, 163, 210, 24), self.multiplayer_join_code,
+                    self.menu_input_focus == "room_code"
+                )
+                self.draw_menu_button(pygame.Rect(382, 199, 100, 31), "방 만들기")
+                self.draw_menu_button(pygame.Rect(492, 199, 100, 31), "방 참가")
+                self.text(
+                    self.canvas, self.multiplayer_status, 489, 245, 7,
+                    (230, 196, 125), center=True
+                )
+                self.draw_menu_button(pygame.Rect(382, 273, 210, 34), "← 메인 메뉴")
+            else:
+                room = self.multiplayer_room
+                self.text(self.canvas, f"방 코드  {room.get('room_code', '')}", 489, 69, 12, C["gold"], center=True)
+                self.text(self.canvas, "참가 플레이어", 385, 91, 9, C["muted"])
+                players = room.get("players", [])
+                for index, player in enumerate(players[:4]):
+                    ready_text = "준비 완료" if player.get("ready") else "대기 중"
+                    host_text = " · 방장" if player.get("is_host") else ""
+                    self.text(
+                        self.canvas,
+                        f"{player.get('nickname', 'Player')}{host_text}",
+                        390, 111 + index * 23, 9, C["text"]
+                    )
+                    self.text(
+                        self.canvas, ready_text, 580, 111 + index * 23, 8,
+                        C["green"] if player.get("ready") else C["muted"], center=True
+                    )
+                self.text(
+                    self.canvas, self.multiplayer_status, 489, 215, 7,
+                    (230, 196, 125), center=True
+                )
+                self.draw_menu_button(pygame.Rect(382, 232, 100, 31), "준비 변경")
+                self.draw_menu_button(pygame.Rect(492, 232, 100, 31), "채팅 전송")
+                self.draw_menu_input(
+                    pygame.Rect(382, 269, 210, 24), self.multiplayer_chat_text,
+                    self.menu_input_focus == "chat"
+                )
+                self.draw_menu_button(pygame.Rect(382, 303, 100, 28), "나가기")
+                self.draw_menu_button(pygame.Rect(492, 303, 100, 28), "새로고침")
+
         if self.settings_open:
             self.draw_settings_modal()
         if self.help_open:
             self.draw_help_modal()
         if self.save_dialog_mode is not None:
             self.draw_save_dialog()
+
+    def draw_menu_input(
+        self, rect: pygame.Rect, value: str, focused: bool = False
+    ) -> None:
+        pygame.draw.rect(self.canvas, (10, 20, 25), rect)
+        pygame.draw.rect(
+            self.canvas, C["gold"] if focused else (86, 109, 98), rect, 1
+        )
+        text_value = str(value)
+        max_width = rect.width - 12
+        while text_value and self.font(8).size(text_value)[0] > max_width:
+            text_value = text_value[1:]
+        self.text(
+            self.canvas, text_value or ("입력..." if focused else ""),
+            rect.x + 6, rect.y + 7, 8,
+            C["text"] if text_value else C["muted"]
+        )
 
     def draw_settings_modal(self) -> None:
         if not self.settings_open:
