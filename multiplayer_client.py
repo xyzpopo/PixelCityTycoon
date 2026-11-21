@@ -4,7 +4,6 @@ import json
 import queue
 import threading
 from typing import List, Optional
-import websocket
 
 class MultiplayerClient:
     """Keep all socket work off the Pygame/UI thread."""
@@ -46,6 +45,8 @@ class MultiplayerClient:
     def _run(self, first_message: dict) -> None:
         sock = None
         try:
+            # Delayed import keeps the browser build free from desktop socket APIs.
+            websocket = __import__("websocket")
             sock = websocket.create_connection(self._url, timeout=12,
                                                enable_multithread=True, suppress_origin=True)
             self._socket = sock
