@@ -15,12 +15,11 @@ COMBINE_VOWEL = {
 }
 SPLIT_VOWEL = {value: pair[0] for pair, value in COMBINE_VOWEL.items()}
 COMBINE_FINAL = {
-    ("ㄱ", "ㄱ"): "ㄲ", ("ㄱ", "ㅅ"): "ㄳ",
+    ("ㄱ", "ㅅ"): "ㄳ",
     ("ㄴ", "ㅈ"): "ㄵ", ("ㄴ", "ㅎ"): "ㄶ",
     ("ㄹ", "ㄱ"): "ㄺ", ("ㄹ", "ㅁ"): "ㄻ", ("ㄹ", "ㅂ"): "ㄼ",
     ("ㄹ", "ㅅ"): "ㄽ", ("ㄹ", "ㅌ"): "ㄾ", ("ㄹ", "ㅍ"): "ㄿ",
     ("ㄹ", "ㅎ"): "ㅀ", ("ㅂ", "ㅅ"): "ㅄ",
-    ("ㅅ", "ㅅ"): "ㅆ",
 }
 SPLIT_FINAL = {value: pair for pair, value in COMBINE_FINAL.items()}
 DOUBLE_INITIAL = {
