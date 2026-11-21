@@ -68,6 +68,12 @@ class TouchKeyboardGameTests(unittest.TestCase):
             self.game.press_virtual_keyboard_key(char, "character")
         self.assertEqual(self.game.multiplayer_join_code, "A2B3C4")
 
+    def test_backspace_removes_one_complete_hangul_character(self):
+        self.game.menu_input_focus = "nickname"
+        self.game.multiplayer_nickname = "한글"
+        self.game.backspace_virtual_keyboard()
+        self.assertEqual(self.game.multiplayer_nickname, "한")
+
     def test_keyboard_done_closes_overlay_and_input_focus(self):
         with patch.object(main, "IS_WEB", True):
             self.game.focus_multiplayer_input("chat")
