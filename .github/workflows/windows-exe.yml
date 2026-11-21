@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "main.py"
+      - "multiplayer_client.py"
       - "virtual_keyboard.py"
       - "prepare_korean_font.py"
       - "tests/**"
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - "main.py"
+      - "multiplayer_client.py"
       - "virtual_keyboard.py"
       - "prepare_korean_font.py"
       - "tests/**"
