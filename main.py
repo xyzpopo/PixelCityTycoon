@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import pygame
 from game_command_adapter import LocalGameCommandAdapter
+from virtual_keyboard import append_hangul_jamo, backspace_hangul
 
 # -----------------------------------------------------------------------------
 # Paths and configuration
@@ -368,6 +369,9 @@ class CityGame:
         self.multiplayer_client = None
         self.menu_input_focus: Optional[str] = None
         self.menu_input_replace = False
+        self.virtual_keyboard_open = False
+        self.virtual_keyboard_mode = "ko"
+        self.virtual_keyboard_shift = False
         self.multiplayer_room_list: List[Dict[str, object]] = []
         self.settings_open = False
         self.help_open = False
@@ -393,10 +397,15 @@ class CityGame:
     # Fonts / UI helpers
     # ------------------------------------------------------------------
     def _find_font(self) -> Optional[str]:
-        # Ship the same Korean-capable font with desktop and browser builds.
-        bundled_font = BASE_DIR / "assets" / "fonts" / "NotoSansKR[wght].ttf"
-        if bundled_font.is_file():
-            return str(bundled_font)
+        # Prefer a static Regular instance: some browser SDL_ttf builds render
+        # variable-font axes inconsistently.
+        font_candidates = (
+            BASE_DIR / "assets" / "fonts" / "NotoSansKR-Regular.ttf",
+            BASE_DIR / "assets" / "fonts" / "NotoSansKR[wght].ttf",
+        )
+        for bundled_font in font_candidates:
+            if bundled_font.is_file():
+                return str(bundled_font)
         names = ["malgungothic", "nanumgothic", "noto sans cjk kr", "arial", "dejavusans"]
         for name in names:
             path = pygame.font.match_font(name)
@@ -412,7 +421,8 @@ class CityGame:
     def text(self, surface: pygame.Surface, value: str, x: int, y: int,
              size: int = 12, color: Tuple[int, int, int] = C["text"],
              center: bool = False) -> None:
-        img = self.font(size).render(str(value), False, color)
+        # Antialiasing improves small Korean glyphs before the pixel-perfect 2x upscale.
+        img = self.font(size).render(str(value), True, color)
         rect = img.get_rect()
         if center:
             rect.center = (x, y)
@@ -2154,6 +2164,17 @@ class CityGame:
             elif kind == "transport_closed" and not self.multiplayer_room:
                 self.multiplayer_status = "서버 연결이 종료됐어요."
 
+    def focus_multiplayer_input(self, field: str) -> None:
+        """Focus a lobby field and show the touch keyboard in browser builds."""
+        if field not in ("nickname", "room_code", "chat"):
+            return
+        self.menu_input_focus = field
+        self.menu_input_replace = field != "chat"
+        self.virtual_keyboard_open = IS_WEB
+        self.virtual_keyboard_mode = "en" if field == "room_code" else "ko"
+        self.virtual_keyboard_shift = field == "room_code"
+        pygame.key.start_text_input()
+
     def send_multiplayer_chat(self) -> None:
         text = self.multiplayer_chat_text.strip()
         if not text or self.multiplayer_client is None:
@@ -2161,6 +2182,8 @@ class CityGame:
         self.multiplayer_client.send({"type": "chat", "message": text[:240]})
         self.multiplayer_chat_text = ""
         self.menu_input_focus = None
+        self.virtual_keyboard_open = False
+        pygame.key.stop_text_input()
 
     def leave_multiplayer_room(self) -> None:
         if self.multiplayer_client is not None:
@@ -2172,9 +2195,18 @@ class CityGame:
         self.multiplayer_status = "방에서 나왔어요."
         self.multiplayer_chat_history.clear()
         self.menu_input_focus = None
+        self.virtual_keyboard_open = False
+        pygame.key.stop_text_input()
 
     def handle_menu_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
+        if self.virtual_keyboard_open:
+            if self.handle_virtual_keyboard_click(pos):
+                return
+            # A tap outside the keyboard closes it and continues to the menu.
+            self.virtual_keyboard_open = False
+            self.menu_input_focus = None
+            pygame.key.stop_text_input()
         if self.save_dialog_mode is not None:
             self.handle_save_dialog_click(pos)
             return
@@ -2204,14 +2236,10 @@ class CityGame:
         elif self.menu_screen == "multi":
             if self.multiplayer_room is None:
                 if pygame.Rect(382, 79, 210, 24).collidepoint(x, y):
-                    self.menu_input_focus = "nickname"
-                    self.menu_input_replace = True
-                    pygame.key.start_text_input()
+                    self.focus_multiplayer_input("nickname")
                     return
                 if pygame.Rect(382, 121, 210, 24).collidepoint(x, y):
-                    self.menu_input_focus = "room_code"
-                    self.menu_input_replace = True
-                    pygame.key.start_text_input()
+                    self.focus_multiplayer_input("room_code")
                     return
                 if pygame.Rect(382, 157, 100, 31).collidepoint(x, y):
                     self.menu_input_focus = None
@@ -2249,9 +2277,7 @@ class CityGame:
                     self.send_multiplayer_chat()
                     return
                 if pygame.Rect(382, 269, 210, 24).collidepoint(x, y):
-                    self.menu_input_focus = "chat"
-                    self.menu_input_replace = True
-                    pygame.key.start_text_input()
+                    self.focus_multiplayer_input("chat")
                     return
                 if pygame.Rect(382, 303, 100, 28).collidepoint(x, y):
                     self.leave_multiplayer_room()
@@ -4741,6 +4767,8 @@ class CityGame:
             self.draw_help_modal()
         if self.save_dialog_mode is not None:
             self.draw_save_dialog()
+        if self.virtual_keyboard_open and self.menu_screen == "multi":
+            self.draw_virtual_keyboard()
 
     def draw_menu_input(
         self, rect: pygame.Rect, value: str, focused: bool = False
@@ -4758,6 +4786,175 @@ class CityGame:
             rect.x + 6, rect.y + 7, 8,
             C["text"] if text_value else C["muted"]
         )
+
+    def virtual_keyboard_specs(self):
+        """Return touch-friendly on-screen key rectangles and their actions."""
+        specs = []
+
+        def add_row(items, y, x, widths, kind="character"):
+            gap = 4
+            current_x = x
+            for item, width in zip(items, widths):
+                if isinstance(item, tuple):
+                    label, value, item_kind, shifted = item
+                else:
+                    label = value = item
+                    item_kind, shifted = kind, None
+                rect = pygame.Rect(current_x, y, width, 24)
+                specs.append((rect, label, value, item_kind, shifted))
+                current_x += width + gap
+
+        digits = list("1234567890")
+        add_row(digits, 206, 32, [54] * 10)
+
+        if self.virtual_keyboard_mode == "ko":
+            row_one = [
+                ("ㅂ", "ㅂ", "jamo", "ㅃ"), ("ㅈ", "ㅈ", "jamo", "ㅉ"),
+                ("ㄷ", "ㄷ", "jamo", "ㄸ"), ("ㄱ", "ㄱ", "jamo", "ㄲ"),
+                ("ㅅ", "ㅅ", "jamo", "ㅆ"), ("ㅛ", "ㅛ", "jamo", None),
+                ("ㅕ", "ㅕ", "jamo", None), ("ㅑ", "ㅑ", "jamo", None),
+                ("ㅐ", "ㅐ", "jamo", "ㅒ"), ("ㅔ", "ㅔ", "jamo", "ㅖ"),
+            ]
+            row_two = [(ch, ch, "jamo", None) for ch in "ㅁㄴㅇㄹㅎㅗㅓㅏㅣ"]
+            row_three = [(ch, ch, "jamo", None) for ch in "ㅋㅌㅊㅍㅠㅜㅡ"]
+        else:
+            row_one = [(ch, ch, "character", ch.upper()) for ch in "qwertyuiop"]
+            row_two = [(ch, ch, "character", ch.upper()) for ch in "asdfghjkl"]
+            row_three = [(ch, ch, "character", ch.upper()) for ch in "zxcvbnm"]
+
+        add_row(row_one, 232, 32, [54] * 10)
+        add_row(row_two, 258, 61, [54] * 9)
+        add_row([("⇧", "", "shift", None)] + row_three
+                + [("⌫", "", "backspace", None)],
+                284, 53, [54] + [54] * 7 + [70])
+        # Wide controls are easier to tap on phones and tablets.
+        add_row([
+            ("한/영", "", "language", None),
+            ("공백", " ", "space", None),
+            ("완료", "", "done", None),
+        ], 313, 72, [110, 260, 110])
+        return specs
+
+    def apply_virtual_keyboard_character(
+        self, value: str, kind: str = "character"
+    ) -> None:
+        field = self.menu_input_focus
+        if field not in ("nickname", "room_code", "chat") or not value:
+            return
+        if self.menu_input_replace and field != "chat":
+            if field == "nickname":
+                self.multiplayer_nickname = ""
+            else:
+                self.multiplayer_join_code = ""
+            self.menu_input_replace = False
+
+        if field == "room_code":
+            cleaned = "".join(ch for ch in value.upper() if ch.isalnum())
+            self.multiplayer_join_code = (self.multiplayer_join_code + cleaned)[:6]
+            return
+
+        current = self.multiplayer_nickname if field == "nickname" else self.multiplayer_chat_text
+        if kind == "jamo":
+            updated = append_hangul_jamo(current, value)
+        else:
+            updated = current + value
+        updated = updated[:16] if field == "nickname" else updated[:240]
+        if field == "nickname":
+            self.multiplayer_nickname = updated
+        else:
+            self.multiplayer_chat_text = updated
+
+    def backspace_virtual_keyboard(self) -> None:
+        field = self.menu_input_focus
+        if field == "nickname":
+            self.multiplayer_nickname = backspace_hangul(self.multiplayer_nickname)
+        elif field == "room_code":
+            self.multiplayer_join_code = self.multiplayer_join_code[:-1]
+        elif field == "chat":
+            self.multiplayer_chat_text = backspace_hangul(self.multiplayer_chat_text)
+
+    def press_virtual_keyboard_key(
+        self, value: str, kind: str = "character", shifted: Optional[str] = None
+    ) -> None:
+        if kind == "shift":
+            self.virtual_keyboard_shift = not self.virtual_keyboard_shift
+            return
+        if kind == "language":
+            self.virtual_keyboard_mode = "en" if self.virtual_keyboard_mode == "ko" else "ko"
+            self.virtual_keyboard_shift = self.menu_input_focus == "room_code"
+            return
+        if kind == "done":
+            self.virtual_keyboard_open = False
+            self.menu_input_focus = None
+            pygame.key.stop_text_input()
+            return
+        if kind == "backspace":
+            self.backspace_virtual_keyboard()
+            self.menu_input_replace = False
+            return
+        if kind == "space":
+            if self.menu_input_focus != "room_code":
+                self.apply_virtual_keyboard_character(" ", "character")
+            return
+        if kind == "character":
+            if shifted and self.virtual_keyboard_shift:
+                value = shifted
+            elif self.menu_input_focus == "room_code":
+                value = value.upper()
+        self.apply_virtual_keyboard_character(value, kind)
+
+    def handle_virtual_keyboard_click(self, pos: Tuple[int, int]) -> bool:
+        panel = pygame.Rect(16, 180, 608, 174)
+        if not panel.collidepoint(pos):
+            return False
+        for rect, _label, value, kind, shifted in self.virtual_keyboard_specs():
+            if rect.collidepoint(pos):
+                self.press_virtual_keyboard_key(value, kind, shifted)
+                return True
+        return True
+
+    def draw_virtual_keyboard(self) -> None:
+        panel = pygame.Rect(16, 180, 608, 174)
+        pygame.draw.rect(self.canvas, (19, 31, 38), panel)
+        pygame.draw.rect(self.canvas, (192, 159, 88), panel, 2)
+        field_names = {"nickname": "닉네임", "room_code": "방 코드", "chat": "채팅"}
+        field = self.menu_input_focus
+        if field == "nickname":
+            current = self.multiplayer_nickname
+        elif field == "room_code":
+            current = self.multiplayer_join_code
+        else:
+            current = self.multiplayer_chat_text
+        preview = current[-30:]
+        self.text(
+            self.canvas,
+            f"{field_names.get(field, '문자 입력')}: {preview}",
+            28, 186, 9, C["white"]
+        )
+        mode_label = "한글 입력" if self.virtual_keyboard_mode == "ko" else "영문 입력"
+        self.text(
+            self.canvas, mode_label, 600, 186, 8, C["gold"], center=True
+        )
+
+        for rect, label, value, kind, shifted in self.virtual_keyboard_specs():
+            shown = label
+            if kind == "character":
+                if shifted and self.virtual_keyboard_shift:
+                    shown = shifted
+                elif self.menu_input_focus == "room_code":
+                    shown = value.upper()
+            elif kind == "shift" and self.virtual_keyboard_shift:
+                shown = "▲"
+            background = (54, 69, 73)
+            border = (103, 127, 119)
+            if kind in ("done", "language", "space"):
+                background, border = (74, 80, 58), (184, 158, 88)
+            pygame.draw.rect(self.canvas, background, rect)
+            pygame.draw.rect(self.canvas, border, rect, 1)
+            self.text(
+                self.canvas, shown, rect.centerx, rect.centery, 10,
+                C["white"], center=True
+            )
 
     def draw_settings_modal(self) -> None:
         if not self.settings_open:
@@ -5276,6 +5473,7 @@ class CityGame:
                     if self.menu_screen == "multi" and self.menu_input_focus:
                         if event.key == pygame.K_ESCAPE:
                             self.menu_input_focus = None
+                            self.virtual_keyboard_open = False
                             pygame.key.stop_text_input()
                         elif event.key == pygame.K_BACKSPACE:
                             field = self.menu_input_focus
@@ -5300,6 +5498,7 @@ class CityGame:
                             self.menu_screen = "main"
                             self.menu_message = ""
                             self.menu_input_focus = None
+                            self.virtual_keyboard_open = False
                             pygame.key.stop_text_input()
                         else:
                             self.running = False
