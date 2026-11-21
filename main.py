@@ -2084,37 +2084,174 @@ class CityGame:
         self.tool_dragging = False
         self.dragging = False
 
+    def start_multiplayer_action(self, action: str) -> None:
+        """Connect to the configured lobby server and create/join a room."""
+        if IS_WEB:
+            self.multiplayer_status = "온라인 로비는 현재 Windows EXE에서 먼저 지원해요."
+            return
+        if not self.multiplayer_server_url.startswith(("ws://", "wss://")):
+            self.multiplayer_status = "서버 주소는 ws:// 또는 wss://로 시작해야 해요."
+            return
+        if not self.multiplayer_nickname.strip():
+            self.multiplayer_status = "닉네임을 입력해 주세요."
+            return
+        if action == "join_room" and len(self.multiplayer_join_code.strip()) != 6:
+            self.multiplayer_status = "참가할 방 코드 6자리를 입력해 주세요."
+            return
+        first_message = {
+            "type": action,
+            "nickname": self.multiplayer_nickname.strip()[:16],
+        }
+        if action == "join_room":
+            first_message["room_code"] = self.multiplayer_join_code.strip().upper()
+        try:
+            if self.multiplayer_client is not None and self.multiplayer_client.running:
+                self.multiplayer_client.send(first_message)
+            else:
+                from multiplayer_client import MultiplayerClient
+                self.multiplayer_client = MultiplayerClient()
+                self.multiplayer_client.connect(self.multiplayer_server_url.strip(), first_message)
+            self.multiplayer_status = "서버에 연결하는 중..."
+        except Exception as exc:
+            self.multiplayer_status = f"연결을 시작하지 못했어요: {exc}"
+
+    def poll_multiplayer(self) -> None:
+        """Apply network events on the Pygame thread, never in the socket worker."""
+        client = self.multiplayer_client
+        if client is None:
+            return
+        for message in client.poll():
+            kind = message.get("type")
+            if kind == "transport_connected":
+                self.multiplayer_status = "서버에 연결됐어요. 방 정보를 기다리는 중..."
+            elif kind == "connected":
+                self.multiplayer_player_id = message.get("player_id", "")
+            elif kind in ("room_created", "room_joined"):
+                self.multiplayer_status = f"방 {message.get('room_code', '')} 연결 중..."
+            elif kind == "lobby_updated":
+                room = message.get("room")
+                if isinstance(room, dict):
+                    self.multiplayer_room = room
+                    self.multiplayer_status = (
+                        f"참가자 {len(room.get('players', []))}/4명 · "
+                        f"{'방장' if room.get('is_host') else '참가자'}"
+                    )
+            elif kind == "room_left":
+                self.multiplayer_room = None
+                self.multiplayer_status = "방에서 나왔어요."
+            elif kind == "room_list":
+                rooms = message.get("rooms", [])
+                self.multiplayer_room_list = rooms if isinstance(rooms, list) else []
+                if self.multiplayer_room_list:
+                    codes = ", ".join(
+                        str(room.get("room_code", "")) for room in self.multiplayer_room_list[:4]
+                    )
+                    self.multiplayer_status = f"공개 방: {codes}"
+                else:
+                    self.multiplayer_status = "현재 참가 가능한 공개 방이 없어요."
+            elif kind == "chat_message":
+                line = f"{message.get('nickname', 'Player')}: {message.get('message', '')}"
+                self.multiplayer_chat_history.append(line)
+                self.multiplayer_chat_history = self.multiplayer_chat_history[-4:]
+                self.multiplayer_status = line
+            elif kind == "error":
+                self.multiplayer_status = str(message.get("message", "온라인 오류"))[:110]
+            elif kind == "transport_closed" and not self.multiplayer_room:
+                self.multiplayer_status = "서버 연결이 종료됐어요."
+
+    def send_multiplayer_chat(self) -> None:
+        text = self.multiplayer_chat_text.strip()
+        if not text or self.multiplayer_client is None:
+            return
+        self.multiplayer_client.send({"type": "chat", "message": text[:240]})
+        self.multiplayer_chat_text = ""
+        self.menu_input_focus = None
+
+    def leave_multiplayer_room(self) -> None:
+        if self.multiplayer_client is not None:
+            try:
+                self.multiplayer_client.send({"type": "leave_room"})
+            except Exception:
+                pass
+        self.multiplayer_room = None
+        self.multiplayer_status = "방에서 나왔어요."
+        self.multiplayer_chat_history.clear()
+        self.menu_input_focus = None
+
     def handle_menu_click(self, pos: Tuple[int, int]) -> None:
         x, y = pos
         if self.save_dialog_mode is not None:
             self.handle_save_dialog_click(pos)
             return
         if self.menu_screen == "main":
-            if pygame.Rect(382, 77, 210, 36).collidepoint(x, y):
+            if pygame.Rect(382, 68, 210, 38).collidepoint(x, y):
                 self.menu_screen, self.menu_message = "single", ""
-            elif pygame.Rect(382, 121, 210, 36).collidepoint(x, y):
+            elif pygame.Rect(382, 116, 210, 38).collidepoint(x, y):
                 self.menu_screen = "multi"
-                self.menu_message = "온라인 멀티플레이 서버는 아직 연결되지 않았어요."
-            elif pygame.Rect(382, 165, 210, 36).collidepoint(x, y):
+                self.menu_input_focus = "server"
+                self.multiplayer_status = "서버 주소를 확인하고 방을 만들거나 참가하세요."
+            elif pygame.Rect(382, 164, 210, 38).collidepoint(x, y):
                 self.settings_open = True
-            elif pygame.Rect(382, 209, 210, 36).collidepoint(x, y):
+            elif pygame.Rect(382, 212, 210, 38).collidepoint(x, y):
                 self.help_open = True
-            elif pygame.Rect(382, 253, 210, 36).collidepoint(x, y):
+            elif pygame.Rect(382, 260, 210, 38).collidepoint(x, y):
                 self.running = False
+
         elif self.menu_screen == "single":
-            if pygame.Rect(382, 111, 210, 38).collidepoint(x, y):
+            if pygame.Rect(382, 104, 210, 40).collidepoint(x, y):
                 self.start_new_game()
-            elif pygame.Rect(382, 158, 210, 38).collidepoint(x, y):
+            elif pygame.Rect(382, 154, 210, 40).collidepoint(x, y):
                 self.open_save_dialog("load")
-            elif pygame.Rect(382, 258, 210, 34).collidepoint(x, y):
+            elif pygame.Rect(382, 273, 210, 34).collidepoint(x, y):
                 self.menu_screen = "main"
+
         elif self.menu_screen == "multi":
-            if pygame.Rect(382, 111, 210, 38).collidepoint(x, y):
-                self.menu_message = "방 만들기: 온라인 기능 준비 중"
-            elif pygame.Rect(382, 158, 210, 38).collidepoint(x, y):
-                self.menu_message = "방 참가: 온라인 기능 준비 중"
-            elif pygame.Rect(382, 258, 210, 34).collidepoint(x, y):
-                self.menu_screen, self.menu_message = "main", ""
+            if self.multiplayer_room is None:
+                if pygame.Rect(382, 79, 210, 24).collidepoint(x, y):
+                    self.menu_input_focus = "server"
+                    return
+                if pygame.Rect(382, 121, 210, 24).collidepoint(x, y):
+                    self.menu_input_focus = "nickname"
+                    return
+                if pygame.Rect(382, 163, 210, 24).collidepoint(x, y):
+                    self.menu_input_focus = "room_code"
+                    return
+                if pygame.Rect(382, 199, 100, 31).collidepoint(x, y):
+                    self.menu_input_focus = None
+                    self.start_multiplayer_action("create_room")
+                    return
+                if pygame.Rect(492, 199, 100, 31).collidepoint(x, y):
+                    self.menu_input_focus = None
+                    self.start_multiplayer_action("join_room")
+                    return
+                if pygame.Rect(382, 273, 210, 34).collidepoint(x, y):
+                    self.menu_input_focus = None
+                    self.menu_screen, self.menu_message = "main", ""
+                    return
+            else:
+                if pygame.Rect(382, 232, 100, 31).collidepoint(x, y):
+                    if self.multiplayer_client is not None:
+                        player_id = getattr(self, "multiplayer_player_id", "")
+                        own = next(
+                            (p for p in self.multiplayer_room.get("players", [])
+                             if p.get("player_id") == player_id), None
+                        )
+                        ready = not bool(own and own.get("ready"))
+                        self.multiplayer_client.send({"type": "set_ready", "ready": ready})
+                    return
+                if pygame.Rect(492, 232, 100, 31).collidepoint(x, y):
+                    self.send_multiplayer_chat()
+                    return
+                if pygame.Rect(382, 269, 210, 24).collidepoint(x, y):
+                    self.menu_input_focus = "chat"
+                    return
+                if pygame.Rect(382, 303, 100, 28).collidepoint(x, y):
+                    self.leave_multiplayer_room()
+                    return
+                if pygame.Rect(492, 303, 100, 28).collidepoint(x, y):
+                    if self.multiplayer_client is not None:
+                        self.multiplayer_client.send({"type": "list_rooms"})
+                    return
 
     def open_save_dialog(self, mode: str) -> None:
         if mode not in ("save", "load"):
