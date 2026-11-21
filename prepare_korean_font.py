@@ -15,10 +15,12 @@ def main() -> None:
         raise SystemExit(f"Source Korean font is missing or incomplete: {source}")
     font = TTFont(str(source))
     axes = {
-        axis.axisTag for axis in font["fvar"].axes
-    } if "fvar" in font else set()
+        axis.axisTag: axis.defaultValue for axis in font["fvar"].axes
+    } if "fvar" in font else {}
     if "wght" in axes:
-        font = instantiateVariableFont(font, {"wght": 400}, inplace=False)
+        axes["wght"] = 400
+    if axes:
+        font = instantiateVariableFont(font, axes, inplace=False)
     output.parent.mkdir(parents=True, exist_ok=True)
     font.save(str(output))
     if output.stat().st_size < 10_000:
