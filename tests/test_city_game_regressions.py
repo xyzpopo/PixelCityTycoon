@@ -129,11 +129,13 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertTrue(self.game.multiplayer_server_url.startswith("ws://"))
         self.assertFalse(self.game.in_game)
 
-    def test_title_menu_uses_the_live_game_world_renderer(self):
+    def test_title_menu_uses_the_complete_gameplay_frame_as_background(self):
         self.game.in_game = False
-        with patch.object(self.game, "draw_world") as draw_world:
+        with patch.object(self.game, "draw_world") as draw_world, \
+             patch.object(self.game, "draw_ui") as draw_ui:
             self.game.draw_menu()
             draw_world.assert_called_once()
+            draw_ui.assert_called_once()
 
     def test_continue_loads_selected_slot_from_single_player_menu(self):
         with tempfile.TemporaryDirectory() as temporary:
