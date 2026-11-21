@@ -5141,10 +5141,34 @@ class CityGame:
                     if event.key == pygame.K_ESCAPE:
                         self.modal_seed = False
                 elif not self.in_game:
-                    if event.key == pygame.K_ESCAPE:
+                    if self.menu_screen == "multi" and self.menu_input_focus:
+                        if event.key == pygame.K_ESCAPE:
+                            self.menu_input_focus = None
+                        elif event.key == pygame.K_BACKSPACE:
+                            field = self.menu_input_focus
+                            if field == "server":
+                                self.multiplayer_server_url = self.multiplayer_server_url[:-1]
+                            elif field == "nickname":
+                                self.multiplayer_nickname = self.multiplayer_nickname[:-1]
+                            elif field == "room_code":
+                                self.multiplayer_join_code = self.multiplayer_join_code[:-1]
+                            elif field == "chat":
+                                self.multiplayer_chat_text = self.multiplayer_chat_text[:-1]
+                        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                            if self.menu_input_focus == "chat":
+                                self.send_multiplayer_chat()
+                            else:
+                                order = ("server", "nickname", "room_code")
+                                try:
+                                    index = order.index(self.menu_input_focus)
+                                    self.menu_input_focus = order[(index + 1) % len(order)]
+                                except ValueError:
+                                    self.menu_input_focus = None
+                    elif event.key == pygame.K_ESCAPE:
                         if self.menu_screen != "main":
                             self.menu_screen = "main"
                             self.menu_message = ""
+                            self.menu_input_focus = None
                         else:
                             self.running = False
                 else:
@@ -5163,6 +5187,22 @@ class CityGame:
                         self.select_tool("house")
                     elif event.key == pygame.K_F5:
                         self.select_tool("restore")
+            elif event.type == pygame.TEXTINPUT:
+                if not self.in_game and self.menu_screen == "multi" and self.menu_input_focus:
+                    value = event.text
+                    field = self.menu_input_focus
+                    if field == "server":
+                        cleaned = "".join(ch for ch in value if ch.isprintable())
+                        self.multiplayer_server_url = (self.multiplayer_server_url + cleaned)[:180]
+                    elif field == "nickname":
+                        cleaned = "".join(ch for ch in value if ch.isprintable())
+                        self.multiplayer_nickname = (self.multiplayer_nickname + cleaned)[:16]
+                    elif field == "room_code":
+                        cleaned = "".join(ch for ch in value.upper() if ch.isalnum())
+                        self.multiplayer_join_code = (self.multiplayer_join_code + cleaned)[:6]
+                    elif field == "chat":
+                        cleaned = "".join(ch for ch in value if ch.isprintable())
+                        self.multiplayer_chat_text = (self.multiplayer_chat_text + cleaned)[:240]
             elif event.type == pygame.FINGERDOWN:
                 self.touch_input_active = True
                 logical = (
@@ -5704,6 +5744,7 @@ class CityGame:
         self.canvas.blit(overlay, (0, TOP_H))
 
     def update(self, dt: float) -> None:
+        self.poll_multiplayer()
         if not self.in_game or self.save_dialog_mode is not None or self.settings_open or self.help_open:
             return
         self.update_worker(dt)
