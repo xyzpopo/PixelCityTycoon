@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "main.py"
+      - "virtual_keyboard.py"
+      - "prepare_korean_font.py"
+      - "tests/**
       - "assets/**"
       - "requirements.txt"
       - ".github/workflows/windows-exe.yml"
@@ -37,6 +40,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install fonttools
 
       - name: Run game regression tests
         env:
@@ -50,6 +54,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path assets/fonts | Out-Null
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf" -OutFile "assets/fonts/NotoSansKR[wght].ttf"
           if ((Get-Item -LiteralPath "assets/fonts/NotoSansKR[wght].ttf").Length -lt 10000) { throw "Korean font download is incomplete." }
+
+      - name: Prepare static Korean font
+        run: python prepare_korean_font.py
 
       - name: Build Windows executable
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets/buildings;assets/buildings" --add-data "assets/fonts;assets/fonts" --hidden-import websocket main.py
