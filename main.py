@@ -23,6 +23,7 @@ from game_command_adapter import LocalGameCommandAdapter
 # Paths and configuration
 # -----------------------------------------------------------------------------
 APP_NAME = "Pixel City Tycoon"
+MULTIPLAYER_SERVER_URL = "wss://pixel-city-tycoon-lobby.onrender.com/ws"
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 IS_WEB = sys.platform == "emscripten"
 WEB_SAVE_KEY = "pixel-city-tycoon-save-v1"
@@ -357,10 +358,6 @@ class CityGame:
         self.menu_screen = "main"
         self.in_game = False
         self.menu_message = ""
-        # Default public lobby server. An environment override remains available for testing.
-        self.multiplayer_server_url = os.environ.get(
-            "PIXEL_CITY_SERVER_URL", "wss://pixel-city-tycoon-lobby.onrender.com/ws"
-        )
         self.multiplayer_nickname = f"Player{random.randint(1000, 9999)}"
         self.multiplayer_join_code = ""
         self.multiplayer_chat_text = ""
@@ -2091,9 +2088,6 @@ class CityGame:
         if IS_WEB:
             self.multiplayer_status = "온라인 로비는 현재 Windows EXE에서 먼저 지원해요."
             return
-        if not self.multiplayer_server_url.startswith(("ws://", "wss://")):
-            self.multiplayer_status = "서버 주소는 ws:// 또는 wss://로 시작해야 해요."
-            return
         if not self.multiplayer_nickname.strip():
             self.multiplayer_status = "닉네임을 입력해 주세요."
             return
@@ -2112,7 +2106,7 @@ class CityGame:
             else:
                 from multiplayer_client import MultiplayerClient
                 self.multiplayer_client = MultiplayerClient()
-                self.multiplayer_client.connect(self.multiplayer_server_url.strip(), first_message)
+                self.multiplayer_client.connect(MULTIPLAYER_SERVER_URL, first_message)
             self.multiplayer_status = "서버에 연결하는 중..."
         except Exception as exc:
             self.multiplayer_status = f"연결을 시작하지 못했어요: {exc}"
@@ -2191,8 +2185,8 @@ class CityGame:
             elif pygame.Rect(382, 116, 210, 38).collidepoint(x, y):
                 self.menu_screen = "multi"
                 self.menu_input_focus = None
-                self.multiplayer_status = "닉네임을 입력하고 방을 만들거나 참가하세요."
-                pygame.key.start_text_input()
+                self.multiplayer_status = "고정 서버에 접속해 방을 만들거나 참가하세요."
+                pygame.key.stop_text_input()
             elif pygame.Rect(382, 164, 210, 38).collidepoint(x, y):
                 self.settings_open = True
             elif pygame.Rect(382, 212, 210, 38).collidepoint(x, y):
@@ -4523,33 +4517,148 @@ class CityGame:
         self.text(self.canvas, label, rect.centerx + 3, rect.centery,
                   11, C["gold"] if hovered else C["text"], center=True)
 
+    def draw_title_diorama(self) -> None:
+        """Show a small title-screen diorama made from the game's real renderers."""
+        scene_rect = pygame.Rect(16, 104, 336, 230)
+        scene = getattr(self, "_title_diorama_surface", None)
+
+        if scene is None:
+            saved_canvas = self.canvas
+            state_names = (
+                "terrain", "trees", "rocks", "roads", "road_directions",
+                "houses", "house_levels", "city_objects", "mines",
+                "map_rotation", "zoom_index", "zoom", "camera_x", "camera_y",
+                "expand_level", "worker_x", "worker_y", "worker_facing",
+                "worker_path", "worker_move_progress", "worker_action",
+                "worker_action_timer", "worker_action_elapsed",
+                "worker_pending_action", "underground_view", "selected_road_tile",
+            )
+            saved_state = {name: getattr(self, name) for name in state_names}
+
+            try:
+                scene = pygame.Surface(scene_rect.size)
+                scene.fill(C["sky"])
+                self.canvas = scene
+
+                # Use a clean, fixed 9x9 patch around the normal starting area.
+                self.terrain = [
+                    [TileInfo("grass", (x * 3 + y) % 3) for y in range(MAP_H)]
+                    for x in range(MAP_W)
+                ]
+                self.trees = {(18, 20), (26, 20), (25, 25)}
+                self.rocks = {(18, 25)}
+                self.roads = {(x, 22) for x in range(18, 26)}
+                self.road_directions = {pos: "x" for pos in self.roads}
+                self.houses = {(19, 20)}
+                self.house_levels = {(19, 20): 2}
+                self.city_objects = {}
+                self.mines = {}
+                self.selected_road_tile = None
+                self.map_rotation = 0
+                self.zoom_index = 4
+                self.zoom = 1.18
+                self.expand_level = 4
+                self.worker_x, self.worker_y = 22, 23
+                self.worker_facing = (1, 0)
+                self.worker_path = []
+                self.worker_move_progress = 0.0
+                self.worker_action = "idle"
+                self.worker_action_timer = 0.0
+                self.worker_action_elapsed = 0.0
+                self.worker_pending_action = None
+                self.underground_view = False
+
+                # A short river runs underneath the same road to form a timber bridge.
+                for x in (20, 21, 22, 23):
+                    self.terrain[x][22].terrain = "water"
+
+                self.camera_x = scene_rect.width / 2
+                self.camera_y = 122 - 44 * (TILE_H * self.zoom / 2)
+
+                # Pixel-clouds sit behind the isometric land patch.
+                pygame.draw.rect(scene, (166, 204, 205), (32, 25, 38, 7))
+                pygame.draw.rect(scene, (166, 204, 205), (40, 19, 20, 7))
+                pygame.draw.rect(scene, (166, 204, 205), (250, 37, 48, 6))
+                pygame.draw.rect(scene, (166, 204, 205), (260, 31, 25, 7))
+
+                cells = [
+                    (x, y)
+                    for x in range(18, 27)
+                    for y in range(18, 27)
+                ]
+                for x, y in sorted(cells, key=lambda pos: (pos[0] + pos[1], pos[0])):
+                    self.draw_tile(x, y)
+
+                for x, y in sorted(self.roads, key=lambda pos: (pos[0] + pos[1], pos[0])):
+                    self.draw_road(x, y)
+
+                # These are the same sprites/renderers used in a running city.
+                decorations = [
+                    (39, "tree", 18, 20),
+                    (39, "house", 19, 20),
+                    (42, "commercial", 23, 19),
+                    (46, "tree", 26, 20),
+                    (43, "park", 19, 24),
+                    (43, "rock", 18, 25),
+                    (50, "tree", 25, 25),
+                ]
+                for _depth, kind, x, y in sorted(decorations):
+                    if kind == "tree":
+                        self.draw_tree(x, y)
+                    elif kind == "house":
+                        self.draw_house(x, y, 2)
+                    elif kind in ("commercial", "park"):
+                        self.draw_city_object(x, y, kind, 1)
+                    elif kind == "rock":
+                        self.draw_rock(x, y)
+
+                # The worker is shown standing on the road beside the new district.
+                self.draw_worker()
+
+                # Small title-screen-only labels make the scene read like a game preview,
+                # not a screenshot of the actual running HUD.
+                pygame.draw.rect(scene, (24, 42, 48), (8, 7, 104, 17))
+                pygame.draw.rect(scene, (99, 131, 108), (8, 7, 104, 17), 1)
+                self.text(scene, "CITY PREVIEW", 15, 11, 8, C["gold"])
+                pygame.draw.rect(scene, (24, 42, 48), (8, 205, 320, 18))
+                pygame.draw.rect(scene, (99, 131, 108), (8, 205, 320, 18), 1)
+                self.text(scene, "DAY 01", 15, 210, 7, C["white"])
+                self.text(scene, "₩100,000", 76, 210, 7, C["gold"])
+                self.text(scene, "WOOD 12", 164, 210, 7, (180, 205, 150))
+                self.text(scene, "STONE 08", 245, 210, 7, (190, 197, 202))
+            finally:
+                self.canvas = saved_canvas
+                for name, value in saved_state.items():
+                    setattr(self, name, value)
+
+            self._title_diorama_surface = scene
+
+        self.canvas.blit(scene, scene_rect.topleft)
+        pygame.draw.rect(self.canvas, (104, 139, 111), scene_rect, 1)
+
     def draw_menu(self) -> None:
-        """Render the title menu over the actual, live game-world scene."""
-        # Reuse the complete gameplay frame: world, resource HUD and toolbar.
-        # Only the simulation is paused; the title screen is not a separate mock scene.
-        self.draw_world()
-        self.draw_ui()
+        """Render a separate title screen with a sprite-built city preview."""
+        self.canvas.fill((17, 29, 38))
 
-        # A restrained dark overlay keeps the landscape visible while making
-        # the menu readable at every time-of-day tint.
-        shade = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
-        shade.fill((7, 15, 22, 92))
-        self.canvas.blit(shade, (0, 0))
+        # Quiet pixel-grid texture; no live world or gameplay HUD is drawn here.
+        for y in range(0, LOGICAL_H, 24):
+            pygame.draw.line(self.canvas, (22, 37, 45), (0, y), (LOGICAL_W, y), 1)
+        for x in range(0, 362, 32):
+            pygame.draw.line(self.canvas, (20, 34, 42), (x, 0), (x, LOGICAL_H), 1)
 
-        # Game title plate on the upper-left, floating over the real world.
-        title_plate = pygame.Surface((250, 67), pygame.SRCALPHA)
-        title_plate.fill((19, 32, 38, 220))
-        self.canvas.blit(title_plate, (17, 18))
-        pygame.draw.rect(self.canvas, (104, 139, 111), (17, 18, 250, 67), 1)
-        pygame.draw.rect(self.canvas, C["gold"], (17, 18, 4, 67))
-        self.text(self.canvas, "PIXEL CITY", 32, 27, 22, C["gold"])
-        self.text(self.canvas, "TYCOON", 34, 51, 15, C["white"])
-        self.text(self.canvas, "BUILD A CITY. MAKE IT YOURS.", 157, 63, 7, C["muted"])
+        pygame.draw.rect(self.canvas, (27, 45, 49), (16, 16, 336, 78))
+        pygame.draw.rect(self.canvas, (99, 131, 108), (16, 16, 336, 78), 1)
+        pygame.draw.rect(self.canvas, C["gold"], (16, 16, 4, 78))
+        self.text(self.canvas, "PIXEL CITY", 27, 22, 23, C["gold"])
+        self.text(self.canvas, "TYCOON", 29, 48, 17, C["white"])
+        self.text(self.canvas, "작은 땅에서 시작해 나만의 도시로", 30, 76, 8, C["muted"])
 
-        # Right-hand panel. The map remains visible around and behind it.
+        self.draw_title_diorama()
+
+        # The right panel contains only menu controls, never a live game window.
         panel_rect = pygame.Rect(366, 18, 246, 324)
         panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
-        panel.fill((18, 31, 36, 232))
+        panel.fill((18, 31, 36, 245))
         self.canvas.blit(panel, panel_rect.topleft)
         pygame.draw.rect(self.canvas, (105, 135, 105), panel_rect, 1)
         pygame.draw.line(self.canvas, C["gold"], (385, 52), (593, 52), 1)
@@ -5165,9 +5274,7 @@ class CityGame:
                             pygame.key.stop_text_input()
                         elif event.key == pygame.K_BACKSPACE:
                             field = self.menu_input_focus
-                            if field == "server":
-                                self.multiplayer_server_url = self.multiplayer_server_url[:-1]
-                            elif field == "nickname":
+                            if field == "nickname":
                                 self.multiplayer_nickname = self.multiplayer_nickname[:-1]
                             elif field == "room_code":
                                 self.multiplayer_join_code = self.multiplayer_join_code[:-1]
@@ -5212,17 +5319,12 @@ class CityGame:
                     value = event.text
                     field = self.menu_input_focus
                     if self.menu_input_replace and field != "chat":
-                        if field == "server":
-                            self.multiplayer_server_url = ""
-                        elif field == "nickname":
+                        if field == "nickname":
                             self.multiplayer_nickname = ""
                         elif field == "room_code":
                             self.multiplayer_join_code = ""
                     self.menu_input_replace = False
-                    if field == "server":
-                        cleaned = "".join(ch for ch in value if ch.isprintable())
-                        self.multiplayer_server_url = (self.multiplayer_server_url + cleaned)[:180]
-                    elif field == "nickname":
+                    if field == "nickname":
                         cleaned = "".join(ch for ch in value if ch.isprintable())
                         self.multiplayer_nickname = (self.multiplayer_nickname + cleaned)[:16]
                     elif field == "room_code":
