@@ -4763,7 +4763,16 @@ class CityGame:
                     )
                 recent_chat = self.multiplayer_chat_history[-2:]
                 for index, line in enumerate(recent_chat):
-                    self.text(self.canvas, line[:40], 386, 194 + index * 10, 7, C["muted"])
+                    # Korean glyphs become hard to distinguish at 7px in the
+                    # low-resolution lobby panel. Keep them larger and fit the
+                    # available width by trimming only the end of each line.
+                    chat_line = line
+                    while chat_line and self.font(9).size(chat_line)[0] > 202:
+                        chat_line = chat_line[:-1]
+                    self.text(
+                        self.canvas, chat_line, 386, 193 + index * 12,
+                        9, C["muted"]
+                    )
                 self.text(
                     self.canvas, self.multiplayer_status, 489, 218, 9,
                     (255, 218, 112), center=True
