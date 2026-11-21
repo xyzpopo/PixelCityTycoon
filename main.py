@@ -2086,9 +2086,7 @@ class CityGame:
 
     def start_multiplayer_action(self, action: str) -> None:
         """Connect to the configured lobby server and create/join a room."""
-        if IS_WEB:
-            self.multiplayer_status = "온라인 로비는 현재 Windows EXE에서 먼저 지원해요."
-            return
+        # The client selects browser WebSocket or desktop threaded transport internally.
         if not self.multiplayer_nickname.strip():
             self.multiplayer_status = "닉네임을 입력해 주세요."
             return
