@@ -356,6 +356,7 @@ class CityGame:
         self.autosave_elapsed = 0.0
         self.last_load_success = False
         self.menu_screen = "main"
+        self._title_diorama_surface: Optional[pygame.Surface] = None
         self.in_game = False
         self.menu_message = ""
         self.multiplayer_nickname = f"Player{random.randint(1000, 9999)}"
@@ -4520,7 +4521,7 @@ class CityGame:
     def draw_title_diorama(self) -> None:
         """Show a small title-screen diorama made from the game's real renderers."""
         scene_rect = pygame.Rect(16, 104, 336, 230)
-        scene = getattr(self, "_title_diorama_surface", None)
+        scene = self._title_diorama_surface
 
         if scene is None:
             saved_canvas = self.canvas
