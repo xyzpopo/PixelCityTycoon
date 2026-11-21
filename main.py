@@ -2162,7 +2162,15 @@ class CityGame:
             elif kind == "error":
                 self.multiplayer_status = str(message.get("message", "온라인 오류"))[:110]
             elif kind == "transport_closed" and not self.multiplayer_room:
-                self.multiplayer_status = "서버 연결이 종료됐어요."
+                # Keep a useful error instead of overwriting it with a generic close event.
+                markers = ("연결 오류", "연결하지 못", "초기화하지 못", "메시지를 읽지 못")
+                if not any(marker in self.multiplayer_status for marker in markers):
+                    code = message.get("code")
+                    reason = str(message.get("reason", "")).strip()
+                    detail = f" (코드 {code})" if code else ""
+                    if reason:
+                        detail += f" · {reason[:45]}"
+                    self.multiplayer_status = f"서버 연결이 종료됐어요{detail}."
 
     def focus_multiplayer_input(self, field: str) -> None:
         """Focus a lobby field and show the touch keyboard in browser builds."""
