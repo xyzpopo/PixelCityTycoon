@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "main.py"
+      - "multiplayer_client.py"
+      - "tests/**"
       - "assets/**"
       - "requirements-web.txt"
       - ".github/workflows/web-game.yml"
