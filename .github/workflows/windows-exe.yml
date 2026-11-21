@@ -7,7 +7,7 @@ on:
       - "main.py"
       - "virtual_keyboard.py"
       - "prepare_korean_font.py"
-      - "tests/**
+      - "tests/**"
       - "assets/**"
       - "requirements.txt"
       - ".github/workflows/windows-exe.yml"
@@ -15,6 +15,9 @@ on:
     branches: [main]
     paths:
       - "main.py"
+      - "virtual_keyboard.py"
+      - "prepare_korean_font.py"
+      - "tests/**"
       - "assets/**"
       - "requirements.txt"
       - ".github/workflows/windows-exe.yml"
