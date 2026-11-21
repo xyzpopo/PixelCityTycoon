@@ -43,3 +43,19 @@ The repository is public and GitHub Pages deploys automatically from successful 
 ### Browser compatibility
 
 Pygbag runs pygame-ce in modern browsers, including mobile browsers. The first visit can take longer because the browser downloads the WebAssembly runtime. The web build downloads and packages Noto Sans KR so Korean text does not depend on fonts installed on the device. Mobile touch controls and layout are being added in stages and still require real-device testing.
+
+
+## Multiplayer lobby server (first online milestone)
+
+The repository includes a WebSocket lobby service for room creation/joining, 2–4 player presence, ready status and lobby chat. The current game client connects from the Windows EXE. Shared-city simulation and authoritative world-command synchronization are **not implemented yet**.
+
+### Deploy the lobby
+
+1. Create a Render account and choose **New → Blueprint**.
+2. Connect this repository and deploy the `render.yaml` blueprint.
+3. When Render provides the service hostname, use `wss://YOUR-SERVICE.onrender.com/ws` in the game's Multiplayer screen.
+4. Check `https://YOUR-SERVICE.onrender.com/health` to confirm the service is awake.
+
+For local testing, install `requirements-server.txt` and run `uvicorn server:app --host 0.0.0.0 --port 8765`. The default game address is `ws://127.0.0.1:8765/ws`. To test with another PC over the internet, deploy the server and use its secure `wss://` address.
+
+Rooms are currently held in server memory and disappear when the service restarts. Do not treat room codes as account authentication. The first milestone is the lobby transport; the next multiplayer milestone is shared-world snapshots, server-ordered game commands and reconnect recovery.
