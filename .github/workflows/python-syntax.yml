@@ -22,8 +22,8 @@ jobs:
       - name: Install game test dependency
         run: python -m pip install --upgrade pip pygame-ce
 
-      - name: Compile game and protocol modules
-        run: python -m py_compile main.py multiplayer_protocol.py
+      - name: Compile game, server and protocol modules
+        run: python -m py_compile main.py multiplayer_protocol.py multiplayer_lobby.py multiplayer_client.py server.py
 
       - name: Run protocol and game regression tests
         env:
