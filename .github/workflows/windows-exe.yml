@@ -52,7 +52,7 @@ jobs:
           if ((Get-Item -LiteralPath "assets/fonts/NotoSansKR[wght].ttf").Length -lt 10000) { throw "Korean font download is incomplete." }
 
       - name: Build Windows executable
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets/buildings;assets/buildings" --add-data "assets/fonts;assets/fonts" main.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name PixelCityTycoon --add-data "assets/buildings;assets/buildings" --add-data "assets/fonts;assets/fonts" --hidden-import websocket main.py
 
       - name: Launch packaged EXE smoke test
         shell: pwsh
