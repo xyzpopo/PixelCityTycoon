@@ -4876,13 +4876,14 @@ class CityGame:
             self.multiplayer_chat_text = updated
 
     def backspace_virtual_keyboard(self) -> None:
+        """Delete one complete visible character per tap."""
         field = self.menu_input_focus
         if field == "nickname":
-            self.multiplayer_nickname = backspace_hangul(self.multiplayer_nickname)
+            self.multiplayer_nickname = self.multiplayer_nickname[:-1]
         elif field == "room_code":
             self.multiplayer_join_code = self.multiplayer_join_code[:-1]
         elif field == "chat":
-            self.multiplayer_chat_text = backspace_hangul(self.multiplayer_chat_text)
+            self.multiplayer_chat_text = self.multiplayer_chat_text[:-1]
 
     def press_virtual_keyboard_key(
         self, value: str, kind: str = "character", shifted: Optional[str] = None
