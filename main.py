@@ -4693,10 +4693,16 @@ class CityGame:
                 self.draw_menu_button(pygame.Rect(382, 157, 100, 31), "방 만들기")
                 self.draw_menu_button(pygame.Rect(492, 157, 100, 31), "방 참가")
                 self.draw_menu_button(pygame.Rect(382, 193, 100, 28), "방 목록")
-                self.text(
-                    self.canvas, self.multiplayer_status, 489, 222, 7,
-                    (230, 196, 125), center=True
-                )
+                # Larger, wrapped status text remains readable on the compact menu panel.
+                status_lines = [
+                    self.multiplayer_status[index:index + 20]
+                    for index in range(0, len(self.multiplayer_status), 20)
+                ][:2]
+                for line_index, status_line in enumerate(status_lines):
+                    self.text(
+                        self.canvas, status_line, 489, 225 + line_index * 13, 9,
+                        (255, 218, 112), center=True
+                    )
                 self.draw_menu_button(pygame.Rect(382, 273, 210, 34), "← 메인 메뉴")
             else:
                 room = self.multiplayer_room
@@ -4719,8 +4725,8 @@ class CityGame:
                 for index, line in enumerate(recent_chat):
                     self.text(self.canvas, line[:40], 386, 194 + index * 10, 7, C["muted"])
                 self.text(
-                    self.canvas, self.multiplayer_status, 489, 218, 7,
-                    (230, 196, 125), center=True
+                    self.canvas, self.multiplayer_status, 489, 218, 9,
+                    (255, 218, 112), center=True
                 )
                 self.draw_menu_button(pygame.Rect(382, 232, 100, 31), "준비 변경")
                 self.draw_menu_button(pygame.Rect(492, 232, 100, 31), "채팅 전송")
