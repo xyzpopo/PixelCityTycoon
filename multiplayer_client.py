@@ -66,42 +66,111 @@ class MultiplayerClient:
                     window.PCTLobbyBridge = (() => {
                         let socket = null;
                         let events = [];
-                        return {
-                            connect(url, firstMessage) {
-                                events = [];
-                                try {
-                                    socket = new WebSocket(url);
-                                    socket.onopen = () => {
-                                        events.push({type: "transport_connected"});
-                                        if (firstMessage) {
+                        let retryTimer = null;
+                        let heartbeatTimer = null;
+                        let active = false;
+                        let attempts = 0;
+                        let pendingFirstMessage = null;
+                        const retryDelays = [1000, 2000, 4000, 8000, 12000, 15000, 15000];
+
+                        function stopTimers() {
+                            if (retryTimer !== null) clearTimeout(retryTimer);
+                            if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+                            retryTimer = null;
+                            heartbeatTimer = null;
+                        }
+
+                        function finishClosed(code, reason) {
+                            events.push({
+                                type: "transport_closed",
+                                code: code || 1006,
+                                reason: reason || ""
+                            });
+                        }
+
+                        function scheduleRetry(code, reason) {
+                            if (!active) {
+                                finishClosed(code, reason);
+                                return;
+                            }
+                            if (attempts > retryDelays.length) {
+                                events.push({
+                                    type: "error",
+                                    message: "서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
+                                });
+                                finishClosed(code, reason || "재연결 시도 실패");
+                                active = false;
+                                return;
+                            }
+                            const delay = retryDelays[attempts - 1] || 15000;
+                            events.push({
+                                type: "retrying",
+                                attempt: attempts,
+                                delay: delay
+                            });
+                            retryTimer = setTimeout(openSocket, delay);
+                        }
+
+                        function openSocket() {
+                            if (!active) return;
+                            attempts += 1;
+                            try {
+                                socket = new WebSocket(window.PCTLobbyBridge.url);
+                                socket.onopen = () => {
+                                    attempts = 0;
+                                    events.push({type: "transport_connected"});
+                                    if (pendingFirstMessage) {
+                                        try {
+                                            socket.send(pendingFirstMessage);
+                                            pendingFirstMessage = null;
+                                        } catch (error) {
+                                            events.push({
+                                                type: "error",
+                                                message: "첫 메시지를 보내지 못했어요: " + String(error)
+                                            });
+                                            socket.close();
+                                            return;
+                                        }
+                                    }
+                                    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+                                    heartbeatTimer = setInterval(() => {
+                                        if (socket && socket.readyState === WebSocket.OPEN) {
                                             try {
-                                                socket.send(firstMessage);
-                                            } catch (error) {
-                                                events.push({type: "error", message: "첫 메시지를 보내지 못했어요: " + String(error)});
+                                                socket.send(JSON.stringify({type: "ping"}));
+                                            } catch (_error) {
+                                                // onclose handles reconnection/status.
                                             }
                                         }
-                                    };
-                                    socket.onmessage = (event) => {
-                                        events.push({type: "raw", data: String(event.data)});
-                                    };
-                                    socket.onerror = () => {
-                                        events.push({type: "error", message: "브라우저 WebSocket 연결 오류가 발생했어요. 서버 주소나 서버 상태를 확인해 주세요."});
-                                    };
-                                    socket.onclose = (event) => {
-                                        events.push({
-                                            type: "transport_closed",
-                                            code: event.code,
-                                            reason: event.reason || ""
-                                        });
-                                    };
-                                    return true;
-                                } catch (error) {
-                                    socket = null;
-                                    events.push({type: "error", message: "WebSocket을 만들지 못했어요: " + String(error)});
-                                    events.push({type: "transport_closed"});
-                                    return false;
-                                }
+                                    }, 25000);
+                                };
+                                socket.onmessage = (event) => {
+                                    events.push({type: "raw", data: String(event.data)});
+                                };
+                                socket.onerror = () => {
+                                    // Browsers provide little detail here; onclose retries.
+                                };
+                                socket.onclose = (event) => {
+                                    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+                                    heartbeatTimer = null;
+                                    scheduleRetry(event.code, event.reason || "");
+                                };
+                            } catch (error) {
+                                scheduleRetry(1006, String(error));
+                            }
+                        }
+
+                        return {
+                            connect(url, firstMessage) {
+                                stopTimers();
+                                events = [];
+                                active = true;
+                                attempts = 0;
+                                pendingFirstMessage = firstMessage || null;
+                                this.url = url;
+                                openSocket();
+                                return true;
                             },
+                            url: "",
                             send(raw) {
                                 if (!socket || socket.readyState !== WebSocket.OPEN) return false;
                                 try {
@@ -119,6 +188,8 @@ class MultiplayerClient:
                                 return socket ? socket.readyState : WebSocket.CLOSED;
                             },
                             close() {
+                                active = false;
+                                stopTimers();
                                 if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
                             }
                         };
@@ -243,7 +314,8 @@ class MultiplayerClient:
             websocket = __import__("websocket")
             sock = websocket.create_connection(
                 self._url,
-                timeout=12,
+                # Render's free instance can take about a minute to wake from idle.
+                timeout=75,
                 enable_multithread=True,
                 suppress_origin=True,
             )
@@ -251,7 +323,12 @@ class MultiplayerClient:
             sock.settimeout(0.15)
             self.incoming.put({"type": "transport_connected"})
             sock.send(json.dumps(first_message, ensure_ascii=False))
+            last_ping = __import__("time").monotonic()
             while not self._stop.is_set():
+                now = __import__("time").monotonic()
+                if now - last_ping >= 25:
+                    sock.send(json.dumps({"type": "ping"}))
+                    last_ping = now
                 while True:
                     try:
                         payload = self.outgoing.get_nowait()
