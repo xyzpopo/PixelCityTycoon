@@ -204,6 +204,38 @@ class MultiplayerClient:
                 messages.append(event)
         return messages
 
+    def send(self, payload: dict) -> None:
+        if not isinstance(payload, dict):
+            raise TypeError("네트워크 메시지는 dict여야 해요.")
+        message = dict(payload)
+        if self._is_web:
+            if self._browser_send_now(message):
+                return
+            bridge = self._browser_bridge
+            if bridge is not None:
+                try:
+                    if int(bridge.state()) == 0:  # WebSocket.CONNECTING
+                        self.outgoing.put(message)
+                        return
+                except Exception:
+                    pass
+                raise RuntimeError("서버 연결이 종료됐어요. 다시 연결해 주세요.")
+        self.outgoing.put(message)
+
+    def poll(self, limit: int = 100) -> List[dict]:
+        if self._is_web:
+            for message in self._poll_browser_events():
+                self.incoming.put(message)
+            if self._browser_bridge is not None:
+                self._flush_browser_outgoing()
+        messages: List[dict] = []
+        for _ in range(max(1, min(limit, 500))):
+            try:
+                messages.append(self.incoming.get_nowait())
+            except queue.Empty:
+                break
+        return messages
+
     def _run(self, first_message: dict) -> None:
         sock = None
         try:
