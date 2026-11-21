@@ -4530,8 +4530,10 @@ class CityGame:
 
     def draw_menu(self) -> None:
         """Render the title menu over the actual, live game-world scene."""
-        # Reuse the exact terrain/building/road/tree/worker renderer from gameplay.
+        # Reuse the complete gameplay frame: world, resource HUD and toolbar.
+        # Only the simulation is paused; the title screen is not a separate mock scene.
         self.draw_world()
+        self.draw_ui()
 
         # A restrained dark overlay keeps the landscape visible while making
         # the menu readable at every time-of-day tint.
