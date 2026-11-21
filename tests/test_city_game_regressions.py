@@ -120,22 +120,35 @@ class CityGameRegressionTests(unittest.TestCase):
         self.assertEqual(self.game.day, 1)
         self.assertFalse(self.game.tutorial_done)
 
-    def test_multiplayer_menu_shows_connection_form_without_faking_gameplay(self):
+    def test_multiplayer_menu_uses_fixed_server_without_address_input(self):
         self.game.in_game = False
         self.game.menu_screen = "main"
         self.game.handle_click((480, 139))
         self.assertEqual(self.game.menu_screen, "multi")
         self.assertIsNone(self.game.multiplayer_room)
-        self.assertTrue(self.game.multiplayer_server_url.startswith("ws://"))
+        self.assertEqual(
+            main.MULTIPLAYER_SERVER_URL,
+            "wss://pixel-city-tycoon-lobby.onrender.com/ws",
+        )
+        source = Path(main.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("PIXEL_CITY_SERVER_URL", source)
+        self.assertNotIn('field == "server"', source)
+        self.assertNotIn("서버 주소", source)
         self.assertFalse(self.game.in_game)
 
-    def test_title_menu_uses_the_complete_gameplay_frame_as_background(self):
+    def test_title_menu_uses_sprite_diorama_not_live_gameplay_frame(self):
         self.game.in_game = False
         with patch.object(self.game, "draw_world") as draw_world, \
-             patch.object(self.game, "draw_ui") as draw_ui:
+             patch.object(self.game, "draw_ui") as draw_ui, \
+             patch.object(
+                 self.game, "draw_title_diorama",
+                 wraps=self.game.draw_title_diorama,
+             ) as draw_diorama:
             self.game.draw_menu()
-            draw_world.assert_called_once()
-            draw_ui.assert_called_once()
+            draw_world.assert_not_called()
+            draw_ui.assert_not_called()
+            draw_diorama.assert_called_once()
+        self.assertIsNotNone(self.game._title_diorama_surface)
 
     def test_continue_loads_selected_slot_from_single_player_menu(self):
         with tempfile.TemporaryDirectory() as temporary:
