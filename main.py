@@ -357,8 +357,9 @@ class CityGame:
         self.menu_screen = "main"
         self.in_game = False
         self.menu_message = ""
+        # Default public lobby server. An environment override remains available for testing.
         self.multiplayer_server_url = os.environ.get(
-            "PIXEL_CITY_SERVER_URL", "ws://127.0.0.1:8765/ws"
+            "PIXEL_CITY_SERVER_URL", "wss://pixel-city-tycoon-lobby.onrender.com/ws"
         )
         self.multiplayer_nickname = f"Player{random.randint(1000, 9999)}"
         self.multiplayer_join_code = ""
@@ -2189,9 +2190,8 @@ class CityGame:
                 self.menu_screen, self.menu_message = "single", ""
             elif pygame.Rect(382, 116, 210, 38).collidepoint(x, y):
                 self.menu_screen = "multi"
-                self.menu_input_focus = "server"
-                self.menu_input_replace = True
-                self.multiplayer_status = "서버 주소를 확인하고 방을 만들거나 참가하세요."
+                self.menu_input_focus = None
+                self.multiplayer_status = "닉네임을 입력하고 방을 만들거나 참가하세요."
                 pygame.key.start_text_input()
             elif pygame.Rect(382, 164, 210, 38).collidepoint(x, y):
                 self.settings_open = True
@@ -2211,31 +2211,26 @@ class CityGame:
         elif self.menu_screen == "multi":
             if self.multiplayer_room is None:
                 if pygame.Rect(382, 79, 210, 24).collidepoint(x, y):
-                    self.menu_input_focus = "server"
-                    self.menu_input_replace = True
-                    pygame.key.start_text_input()
-                    return
-                if pygame.Rect(382, 121, 210, 24).collidepoint(x, y):
                     self.menu_input_focus = "nickname"
                     self.menu_input_replace = True
                     pygame.key.start_text_input()
                     return
-                if pygame.Rect(382, 163, 210, 24).collidepoint(x, y):
+                if pygame.Rect(382, 121, 210, 24).collidepoint(x, y):
                     self.menu_input_focus = "room_code"
                     self.menu_input_replace = True
                     pygame.key.start_text_input()
                     return
-                if pygame.Rect(382, 199, 100, 31).collidepoint(x, y):
+                if pygame.Rect(382, 157, 100, 31).collidepoint(x, y):
                     self.menu_input_focus = None
                     pygame.key.stop_text_input()
                     self.start_multiplayer_action("create_room")
                     return
-                if pygame.Rect(492, 199, 100, 31).collidepoint(x, y):
+                if pygame.Rect(492, 157, 100, 31).collidepoint(x, y):
                     self.menu_input_focus = None
                     pygame.key.stop_text_input()
                     self.start_multiplayer_action("join_room")
                     return
-                if pygame.Rect(382, 235, 100, 28).collidepoint(x, y):
+                if pygame.Rect(382, 193, 100, 28).collidepoint(x, y):
                     if self.multiplayer_client is not None:
                         self.multiplayer_client.send({"type": "list_rooms"})
                     else:
@@ -4575,26 +4570,21 @@ class CityGame:
         else:
             self.text(self.canvas, "멀티 플레이", 489, 38, 13, C["gold"], center=True)
             if self.multiplayer_room is None:
-                self.text(self.canvas, "서버 주소", 384, 66, 8, C["muted"])
+                self.text(self.canvas, "닉네임", 384, 66, 8, C["muted"])
                 self.draw_menu_input(
-                    pygame.Rect(382, 79, 210, 24), self.multiplayer_server_url,
-                    self.menu_input_focus == "server"
-                )
-                self.text(self.canvas, "닉네임", 384, 108, 8, C["muted"])
-                self.draw_menu_input(
-                    pygame.Rect(382, 121, 210, 24), self.multiplayer_nickname,
+                    pygame.Rect(382, 79, 210, 24), self.multiplayer_nickname,
                     self.menu_input_focus == "nickname"
                 )
-                self.text(self.canvas, "방 코드 (참가할 때)", 384, 150, 8, C["muted"])
+                self.text(self.canvas, "방 코드 (참가할 때)", 384, 108, 8, C["muted"])
                 self.draw_menu_input(
-                    pygame.Rect(382, 163, 210, 24), self.multiplayer_join_code,
+                    pygame.Rect(382, 121, 210, 24), self.multiplayer_join_code,
                     self.menu_input_focus == "room_code"
                 )
-                self.draw_menu_button(pygame.Rect(382, 199, 100, 31), "방 만들기")
-                self.draw_menu_button(pygame.Rect(492, 199, 100, 31), "방 참가")
-                self.draw_menu_button(pygame.Rect(382, 235, 100, 28), "방 목록")
+                self.draw_menu_button(pygame.Rect(382, 157, 100, 31), "방 만들기")
+                self.draw_menu_button(pygame.Rect(492, 157, 100, 31), "방 참가")
+                self.draw_menu_button(pygame.Rect(382, 193, 100, 28), "방 목록")
                 self.text(
-                    self.canvas, self.multiplayer_status, 489, 249, 7,
+                    self.canvas, self.multiplayer_status, 489, 222, 7,
                     (230, 196, 125), center=True
                 )
                 self.draw_menu_button(pygame.Rect(382, 273, 210, 34), "← 메인 메뉴")
