@@ -145,6 +145,7 @@
 - [x] Render 배포 blueprint 및 로컬 실행 안내
 - [x] Render 로비 서비스 배포 및 /health 응답 확인 (실제 게임 클라이언트의 외부 접속 테스트는 별도 확인 필요)
 - [x] 브라우저(Pygbag)는 브라우저 내장 WebSocket으로 Render 로비에 연결하고, Windows는 기존 백그라운드 스레드 전송을 유지
+- [x] Render 무료 인스턴스의 콜드 스타트에 대비한 브라우저 재연결 재시도와 25초 간격 연결 유지 ping 추가
 
 ### 0단계 — 지금 완료한 기반
 - [x] multiplayer_protocol.py에 버전이 있는 명령 메시지와 월드 스냅샷 구조 정의
