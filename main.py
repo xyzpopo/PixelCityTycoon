@@ -2159,11 +2159,19 @@ class CityGame:
                 self.multiplayer_chat_history.append(line)
                 self.multiplayer_chat_history = self.multiplayer_chat_history[-4:]
                 self.multiplayer_status = line
+            elif kind == "retrying":
+                attempt = int(message.get("attempt", 1))
+                self.multiplayer_status = (
+                    f"서버가 응답하지 않아 다시 연결하는 중이에요... ({attempt}/7)"
+                )
             elif kind == "error":
                 self.multiplayer_status = str(message.get("message", "온라인 오류"))[:110]
             elif kind == "transport_closed" and not self.multiplayer_room:
                 # Keep a useful error instead of overwriting it with a generic close event.
-                markers = ("연결 오류", "연결하지 못", "초기화하지 못", "메시지를 읽지 못")
+                markers = (
+                    "연결 오류", "연결하지 못", "초기화하지 못",
+                    "메시지를 읽지 못", "다시 연결해 주세요", "서버에 연결하지 못"
+                )
                 if not any(marker in self.multiplayer_status for marker in markers):
                     code = message.get("code")
                     reason = str(message.get("reason", "")).strip()
