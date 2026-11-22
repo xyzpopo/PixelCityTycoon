@@ -4850,7 +4850,7 @@ class CityGame:
         add_row(row_one, 232, 32, [54] * 10)
         add_row(row_two, 258, 61, [54] * 9)
         add_row([("⇧", "", "shift", None)] + row_three
-                + [("⌫", "", "backspace", None)],
+                + [("←", "", "backspace", None)],
                 284, 53, [54] + [54] * 7 + [70])
         # Wide controls are easier to tap on phones and tablets.
         add_row([
