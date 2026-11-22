@@ -182,7 +182,13 @@ class MultiplayerClient:
                                 }
                             },
                             poll() {
-                                return JSON.stringify(events.splice(0, events.length));
+                                const pending = events.splice(0, events.length);
+                                // Keep the JS-to-WASM bridge ASCII-only. Python decodes
+                                // JSON Unicode escapes after the string crosses the boundary.
+                                const slash = String.fromCharCode(92);
+                                return JSON.stringify(pending).replace(/[^ -~]/g, character =>
+                                    slash + "u" + character.charCodeAt(0).toString(16).padStart(4, "0")
+                                );
                             },
                             state() {
                                 return socket ? socket.readyState : WebSocket.CLOSED;
@@ -200,7 +206,7 @@ class MultiplayerClient:
             self._browser_first_message = None
             started = bool(self._browser_bridge.connect(
                 self._url,
-                json.dumps(first_message, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(first_message, ensure_ascii=True, separators=(",", ":")),
             ))
             if not started:
                 self.incoming.put({
@@ -222,7 +228,7 @@ class MultiplayerClient:
         try:
             if int(bridge.state()) != 1:  # WebSocket.OPEN
                 return False
-            raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
             return bool(bridge.send(raw))
         except Exception as exc:
             self.incoming.put({
