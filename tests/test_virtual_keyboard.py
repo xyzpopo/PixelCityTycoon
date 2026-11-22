@@ -74,6 +74,12 @@ class TouchKeyboardGameTests(unittest.TestCase):
         self.game.backspace_virtual_keyboard()
         self.assertEqual(self.game.multiplayer_nickname, "한")
 
+    def test_backspace_key_uses_supported_left_arrow_label(self):
+        labels = [label for _rect, label, _value, _kind, _shifted
+                  in self.game.virtual_keyboard_specs()]
+        self.assertIn("←", labels)
+        self.assertNotIn("⌫", labels)
+
     def test_keyboard_done_closes_overlay_and_input_focus(self):
         with patch.object(main, "IS_WEB", True):
             self.game.focus_multiplayer_input("chat")
