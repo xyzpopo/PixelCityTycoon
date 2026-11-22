@@ -109,6 +109,35 @@ class BrowserMultiplayerClientTests(unittest.TestCase):
         self.assertEqual(messages[0], {"type": "connected", "player_id": "abc"})
         self.assertEqual(messages[1]["type"], "error")
 
+    def test_browser_hangul_chat_survives_ascii_only_bridge(self):
+        client = MultiplayerClient(is_web=True)
+        client.connect(
+            "wss://example.test/ws",
+            {"type": "create_room", "nickname": "호스트"},
+        )
+        bridge = self.window.PCTLobbyBridge
+
+        # Python-to-JavaScript strings stay ASCII while Hangul is preserved in JSON.
+        self.assertTrue(bridge.first_message.isascii())
+        self.assertEqual(json.loads(bridge.first_message)["nickname"], "호스트")
+
+        bridge.open()
+        client.poll()
+        outgoing = {"type": "chat", "message": "안녕하세요"}
+        client.send(outgoing)
+        raw_outgoing = bridge.sent[-1]
+        self.assertTrue(raw_outgoing.isascii())
+        self.assertEqual(json.loads(raw_outgoing), outgoing)
+
+        # The server's Unicode response is decoded after crossing the bridge.
+        incoming = {
+            "type": "chat_message",
+            "nickname": "호스트",
+            "message": "안녕하세요",
+        }
+        bridge.receive(incoming)
+        self.assertEqual(client.poll(), [incoming])
+
     def test_browser_close_updates_running_state_and_emits_closed_event(self):
         client = MultiplayerClient(is_web=True)
         client.connect("wss://example.test/ws", {"type": "list_rooms"})
